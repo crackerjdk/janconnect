@@ -1,0 +1,6 @@
+{
+  "name": "JanConnect",
+  "description": "Your Voice. Your State. Your Accountability. An independent civic reporting and community visibility platform starting in Uttarakhand, India.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
