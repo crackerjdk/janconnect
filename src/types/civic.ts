@@ -1,4 +1,4 @@
-import type { PlatformStatus, UserRole } from '../utils/civicRules';
+import type { BidStatus, PlatformStatus, UserRole } from '../utils/civicRules';
 
 export interface UserProfile {
   id: string;
@@ -34,6 +34,15 @@ export interface LocationNode {
   longitude: number | null;
 }
 
+export interface LocationSearchResult extends LocationNode {
+  district_id: string | null;
+  district_name: string | null;
+  block_id: string | null;
+  block_name: string | null;
+  state_id: string | null;
+  generalized_label: string;
+}
+
 export interface PublicReportSummary {
   id: string;
   title: string;
@@ -48,9 +57,43 @@ export interface PublicReportSummary {
   published_at: string | null;
   support_count: number;
   comment_count: number;
+  bid_count?: number;
+  lowest_bid_inr?: number | null;
+  awarded_bid_id?: string | null;
   preview_media_url: string | null;
   preview_media_type: string | null;
   user_has_supported: boolean;
+}
+
+export interface ContractorBid {
+  id: string;
+  complaint_id: string;
+  contractor_id: string;
+  contractor_username: string;
+  contractor_display_name: string;
+  company_name: string;
+  registration_number: string;
+  bid_amount_inr: number;
+  estimated_days: number;
+  warranty_months: number;
+  proposal_summary: string;
+  bid_status: BidStatus;
+  reviewer_note: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MyContractorBid extends ContractorBid {
+  report_title: string;
+  report_category: string;
+  generalized_location: string;
+}
+
+export interface AdminContractorBidRow extends ContractorBid {
+  report_title: string;
+  report_category: string;
+  generalized_location: string;
 }
 
 export interface MediaAsset {
@@ -132,6 +175,7 @@ export interface AdminAnalyticsResponse {
     removedReports: number;
     reportedContent: number;
     pendingVerifications?: number;
+    activeBids?: number;
   };
   byCategory: Array<{ category: string; count: number }>;
   byDistrict: Array<{ district: string; count: number }>;

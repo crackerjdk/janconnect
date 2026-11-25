@@ -319,3 +319,73 @@ export function normalizePinnedCoordinates(
   };
 }
 
+export const BID_STATUSES = ['submitted', 'shortlisted', 'awarded', 'rejected', 'withdrawn'] as const;
+export type BidStatus = (typeof BID_STATUSES)[number];
+
+export interface BidStatusPresentation {
+  label: string;
+  tone: 'neutral' | 'amber' | 'teal' | 'crimson';
+}
+
+export const BID_STATUS_LABELS: Record<BidStatus, BidStatusPresentation> = {
+  submitted: { label: 'Bid Submitted', tone: 'neutral' },
+  shortlisted: { label: 'Shortlisted', tone: 'amber' },
+  awarded: { label: 'Work Awarded', tone: 'teal' },
+  rejected: { label: 'Not Selected', tone: 'crimson' },
+  withdrawn: { label: 'Withdrawn', tone: 'neutral' },
+};
+
+export interface ContractorBidInput {
+  companyName: string;
+  registrationNumber: string;
+  bidAmountInr: number;
+  estimatedDays: number;
+  warrantyMonths: number;
+  proposalSummary: string;
+}
+
+export function formatInrCurrency(amount: number): string {
+  if (!Number.isFinite(amount)) return '₹0';
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 0,
+  }).format(Math.round(amount));
+}
+
+export function validateContractorBid(input: ContractorBidInput): ValidationResult {
+  const errors: Record<string, string> = {};
+  const companyName = (input.companyName || '').trim();
+  const registrationNumber = (input.registrationNumber || '').trim();
+  const proposalSummary = (input.proposalSummary || '').trim();
+  const bidAmountInr = Number(input.bidAmountInr);
+  const estimatedDays = Number(input.estimatedDays);
+  const warrantyMonths = Number(input.warrantyMonths);
+
+  if (companyName.length < 3 || companyName.length > 100) {
+    errors.companyName = 'Contractor or firm name must be between 3 and 100 characters.';
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9\-\/\s]{2,38}[A-Za-z0-9]$/.test(registrationNumber)) {
+    errors.registrationNumber = 'Enter a valid contractor registration or GSTIN/license reference (4–40 alphanumeric characters).';
+  }
+  if (!Number.isInteger(bidAmountInr) || bidAmountInr < 1000 || bidAmountInr > 500000000) {
+    errors.bidAmountInr = 'Bid amount must be a whole rupee amount between ₹1,000 and ₹50,00,00,000.';
+  }
+  if (!Number.isInteger(estimatedDays) || estimatedDays < 1 || estimatedDays > 730) {
+    errors.estimatedDays = 'Estimated completion timeline must be between 1 and 730 days.';
+  }
+  if (!Number.isInteger(warrantyMonths) || warrantyMonths < 0 || warrantyMonths > 120) {
+    errors.warrantyMonths = 'Workmanship warranty must be between 0 and 120 months.';
+  }
+  if (proposalSummary.length < 20 || proposalSummary.length > 1500) {
+    errors.proposalSummary = 'Work execution & materials proposal must be between 20 and 1,500 characters.';
+  }
+
+  const piiWarnings = detectPotentialPiiHints(`${companyName}\n${proposalSummary}`);
+
+  return {
+    valid: Object.keys(errors).length === 0,
+    errors,
+    piiWarnings,
+  };
+}

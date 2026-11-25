@@ -47,6 +47,12 @@ export function LandingPage() {
                 >
                   <span>Explore Reports</span>
                 </Link>
+                <Link
+                  to="/contractors"
+                  className="inline-flex items-center gap-2 rounded-lg border border-[#E2E6EC] bg-white px-5 py-3 text-sm font-semibold text-[#0D7A6F] hover:bg-[#F7F6F2] transition-colors whitespace-nowrap"
+                >
+                  <span>Contractor Bids</span>
+                </Link>
               </div>
 
               <div className="mt-8 pt-6 border-t border-[#E2E6EC] grid grid-cols-3 gap-4 text-xs text-[#4B5563]">
@@ -55,12 +61,12 @@ export function LandingPage() {
                   <p className="mt-0.5">Reviewed before public listing</p>
                 </div>
                 <div>
-                  <p className="font-semibold text-[#0F2942]">Privacy First</p>
-                  <p className="mt-0.5">EXIF stripped · Area generalized</p>
+                  <p className="font-semibold text-[#0F2942]">Contractor Bidding</p>
+                  <p className="mt-0.5">Transparent repair quotations</p>
                 </div>
                 <div>
-                  <p className="font-semibold text-[#0F2942]">13 Districts</p>
-                  <p className="mt-0.5">Uttarakhand hierarchy ready</p>
+                  <p className="font-semibold text-[#0F2942]">13 Districts · 95 Blocks</p>
+                  <p className="mt-0.5">Uttarakhand village & ward ready</p>
                 </div>
               </div>
             </div>
@@ -195,7 +201,7 @@ export function LandingPage() {
             <ul className="mt-5 space-y-2.5 text-sm text-[#374151]">
               <li className="flex items-start gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-[#0D7A6F] shrink-0 mt-0.5" aria-hidden="true" />
-                <span>Covers all 13 districts of Uttarakhand from Dehradun to Pithoragarh</span>
+                <span>Covers all 13 districts, 95 official development blocks & villages across Uttarakhand</span>
               </li>
               <li className="flex items-start gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-[#0D7A6F] shrink-0 mt-0.5" aria-hidden="true" />
@@ -203,7 +209,7 @@ export function LandingPage() {
               </li>
               <li className="flex items-start gap-2.5">
                 <CheckCircle2 className="w-4 h-4 text-[#0D7A6F] shrink-0 mt-0.5" aria-hidden="true" />
-                <span>Expandable state-by-state hierarchy without rebuilding core workflows</span>
+                <span>Optional live GPS & Google Maps pin picker shared solely with moderators</span>
               </li>
             </ul>
           </div>

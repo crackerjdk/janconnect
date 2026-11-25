@@ -15,14 +15,15 @@ export function SiteHeader() {
     ? [
         { label: 'Home', to: '/home' },
         { label: 'Explore', to: '/explore' },
+        { label: 'Contractor Bids', to: '/contractors' },
         { label: 'My Reports', to: '/my-reports' },
-        { label: 'Notifications', to: '/notifications' },
         isModerator
           ? { label: 'Moderator', to: '/admin' }
           : { label: 'Profile', to: `/profile/${user.username}` },
       ]
     : [
         { label: 'Explore', to: '/explore' },
+        { label: 'Contractor Bids', to: '/contractors' },
         { label: 'Safety', to: '/safety' },
         { label: 'Sign In', to: '/login' },
         { label: 'Moderator', to: '/admin/login' },
@@ -98,13 +99,22 @@ export function SiteHeader() {
             </Link>
           ))}
           {user && (
-            <Link
-              to="/settings"
-              onClick={() => setMobileOpen(false)}
-              className="block rounded-lg px-3 py-2.5 text-sm font-medium text-[#111827] hover:bg-[#F7F6F2]"
-            >
-              Settings
-            </Link>
+            <>
+              <Link
+                to="/notifications"
+                onClick={() => setMobileOpen(false)}
+                className="block rounded-lg px-3 py-2.5 text-sm font-medium text-[#111827] hover:bg-[#F7F6F2]"
+              >
+                Notifications
+              </Link>
+              <Link
+                to="/settings"
+                onClick={() => setMobileOpen(false)}
+                className="block rounded-lg px-3 py-2.5 text-sm font-medium text-[#111827] hover:bg-[#F7F6F2]"
+              >
+                Settings
+              </Link>
+            </>
           )}
           <div className="pt-2">
             <Link

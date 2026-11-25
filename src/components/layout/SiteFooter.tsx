@@ -29,6 +29,11 @@ export function SiteFooter() {
                 </Link>
               </li>
               <li>
+                <Link to="/contractors" className="hover:text-[#0F2942]">
+                  Contractor Work Bids
+                </Link>
+              </li>
+              <li>
                 <Link to="/reports/create" className="hover:text-[#0F2942]">
                   Report a Problem
                 </Link>

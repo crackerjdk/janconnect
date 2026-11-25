@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+/// <reference types="google.maps" />
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   APIProvider,
   APILoadingStatus,
@@ -7,9 +8,10 @@ import {
   Pin,
   useApiLoadingStatus,
   useMap,
+  useMapsLibrary,
   type MapMouseEvent,
 } from '@vis.gl/react-google-maps';
-import { Crosshair, Loader2, MapPin, RotateCcw, Shield } from 'lucide-react';
+import { Crosshair, Loader2, MapPin, RotateCcw, Search, Shield, X } from 'lucide-react';
 import { normalizePinnedCoordinates } from '../../utils/civicRules';
 
 const DEFAULT_UTTARAKHAND_CENTER = { lat: 30.3165, lng: 78.0322 };
@@ -22,23 +24,36 @@ interface GoogleMapPinPickerProps {
   error?: string;
 }
 
+function dispatchQuotaEventIfApplicable(err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err || '');
+  if (
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('429') ||
+    msg.includes('OVER_QUERY_LIMIT') ||
+    msg.includes('QuotaExceeded') ||
+    msg.includes('QUOTA')
+  ) {
+    window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+  }
+}
+
 interface ViewportSyncProps {
   pinPosition: { lat: number; lng: number } | null;
   suggestedCenter: { lat: number; lng: number } | null;
-  gpsFocusNonce: number;
+  focusNonce: number;
 }
 
-function MapViewportSync({ pinPosition, suggestedCenter, gpsFocusNonce }: ViewportSyncProps) {
+function MapViewportSync({ pinPosition, suggestedCenter, focusNonce }: ViewportSyncProps) {
   const map = useMap();
 
   useEffect(() => {
-    if (!map || gpsFocusNonce === 0 || !pinPosition) return;
+    if (!map || focusNonce === 0 || !pinPosition) return;
     map.panTo(pinPosition);
     const currentZoom = map.getZoom();
-    if (typeof currentZoom !== 'number' || currentZoom < 16) {
-      map.setZoom(16);
+    if (typeof currentZoom !== 'number' || currentZoom < 15) {
+      map.setZoom(15);
     }
-  }, [map, gpsFocusNonce, pinPosition]);
+  }, [map, focusNonce, pinPosition]);
 
   useEffect(() => {
     if (!map || pinPosition || !suggestedCenter) return;
@@ -49,10 +64,181 @@ function MapViewportSync({ pinPosition, suggestedCenter, gpsFocusNonce }: Viewpo
   return null;
 }
 
+interface PlaceSearchProps {
+  suggestedCenter: { lat: number; lng: number } | null;
+  onPlaceCoordinates: (lat: number, lng: number, label: string) => void;
+}
+
+function GoogleMapsPlaceSearch({ suggestedCenter, onPlaceCoordinates }: PlaceSearchProps) {
+  const placesLib = useMapsLibrary('places');
+  const status = useApiLoadingStatus();
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<google.maps.places.AutocompleteSuggestion[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const sessionTokenRef = useRef<google.maps.places.AutocompleteSessionToken | null>(null);
+
+  const resetSession = useCallback(() => {
+    sessionTokenRef.current = null;
+    setSuggestions([]);
+  }, []);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!placesLib || status !== APILoadingStatus.LOADED || trimmed.length < 2) {
+      if (trimmed.length < 2 && suggestions.length > 0) {
+        setSuggestions([]);
+      }
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const { AutocompleteSessionToken, AutocompleteSuggestion } = placesLib;
+      if (!sessionTokenRef.current) {
+        sessionTokenRef.current = new AutocompleteSessionToken();
+      }
+
+      const biasCenter = suggestedCenter || DEFAULT_UTTARAKHAND_CENTER;
+      const request: google.maps.places.AutocompleteRequest = {
+        input: trimmed,
+        sessionToken: sessionTokenRef.current,
+        includedRegionCodes: ['in'],
+        locationBias: {
+          center: biasCenter,
+          radius: 50000,
+        },
+      };
+
+      setSearching(true);
+      setSearchError(null);
+      AutocompleteSuggestion.fetchAutocompleteSuggestions(request)
+        .then((res) => {
+          setSuggestions(res.suggestions || []);
+        })
+        .catch((err: unknown) => {
+          dispatchQuotaEventIfApplicable(err);
+          setSuggestions([]);
+          setSearchError('Map place search is temporarily unavailable. You can still tap the map directly.');
+        })
+        .finally(() => {
+          setSearching(false);
+        });
+    }, 240);
+
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placesLib, status, query, suggestedCenter]);
+
+  const handleSelectSuggestion = async (suggestion: google.maps.places.AutocompleteSuggestion) => {
+    if (!placesLib || !suggestion.placePrediction) return;
+    try {
+      setSearching(true);
+      setSearchError(null);
+      const place = suggestion.placePrediction.toPlace();
+      await place.fetchFields({
+        fields: ['displayName', 'formattedAddress', 'location'],
+      });
+      const loc = place.location;
+      if (!loc) {
+        setSearchError('Could not resolve coordinates for that place. Try a nearby landmark or tap the map.');
+        return;
+      }
+      const label = place.displayName || place.formattedAddress || suggestion.placePrediction.text.text;
+      setSelectedLabel(label);
+      setQuery('');
+      resetSession();
+      onPlaceCoordinates(loc.lat(), loc.lng(), label);
+    } catch (err) {
+      dispatchQuotaEventIfApplicable(err);
+      setSearchError('Could not load details for the selected place. Tap the map directly to place your pin.');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  if (status === APILoadingStatus.FAILED || status === APILoadingStatus.AUTH_FAILURE) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="relative">
+        <Search
+          className="w-3.5 h-3.5 text-[#6B7280] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+          aria-hidden="true"
+        />
+        <input
+          type="text"
+          role="searchbox"
+          aria-label="Search Uttarakhand village, landmark, or road on Google Maps"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search any Uttarakhand village, road, or landmark on Google Maps..."
+          className="w-full rounded-lg border border-[#E2E6EC] bg-white pl-8 pr-8 py-2 text-xs sm:text-sm text-[#111827] placeholder:text-[#6B7280]"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => {
+              setQuery('');
+              resetSession();
+            }}
+            aria-label="Clear Google Maps search"
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#6B7280] hover:text-[#111827]"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
+      {searching && query.trim().length >= 2 && (
+        <p className="text-xs text-[#6B7280] flex items-center gap-1.5">
+          <Loader2 className="w-3 h-3 animate-spin text-[#0D7A6F]" aria-hidden="true" />
+          <span>Searching Google Maps...</span>
+        </p>
+      )}
+
+      {suggestions.length > 0 && (
+        <ul
+          role="listbox"
+          aria-label="Google Maps place suggestions"
+          className="rounded-lg border border-[#E2E6EC] bg-white shadow-sm max-h-52 overflow-y-auto divide-y divide-[#E2E6EC]"
+        >
+          {suggestions.map((suggestion, index) => (
+            <li key={suggestion.placePrediction?.placeId || index}>
+              <button
+                type="button"
+                onClick={() => void handleSelectSuggestion(suggestion)}
+                className="w-full flex items-start gap-2 px-3 py-2 text-left text-xs text-[#0F2942] hover:bg-[#F7F6F2] transition-colors"
+              >
+                <MapPin className="w-3.5 h-3.5 text-[#0D7A6F] shrink-0 mt-0.5" aria-hidden="true" />
+                <span>{suggestion.placePrediction?.text.text}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {selectedLabel && !query && (
+        <p className="text-xs text-[#0D7A6F]">
+          Map jumped to <strong>{selectedLabel}</strong> — tap or drag the pin if needed.
+        </p>
+      )}
+
+      {searchError && (
+        <p role="status" className="text-xs text-amber-800">
+          {searchError}
+        </p>
+      )}
+    </div>
+  );
+}
+
 interface MapCanvasProps {
   pinPosition: { lat: number; lng: number } | null;
   suggestedCenter: { lat: number; lng: number } | null;
-  gpsFocusNonce: number;
+  focusNonce: number;
   onMapClick: (lat: number, lng: number) => void;
   onMarkerDragEnd: (lat: number, lng: number) => void;
 }
@@ -60,7 +246,7 @@ interface MapCanvasProps {
 function InteractivePinMapCanvas({
   pinPosition,
   suggestedCenter,
-  gpsFocusNonce,
+  focusNonce,
   onMapClick,
   onMarkerDragEnd,
 }: MapCanvasProps) {
@@ -70,7 +256,7 @@ function InteractivePinMapCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
-  const initialZoom = pinPosition ? 16 : suggestedCenter ? 12 : 9;
+  const initialZoom = pinPosition ? 15 : suggestedCenter ? 12 : 9;
 
   if (status === APILoadingStatus.FAILED || status === APILoadingStatus.AUTH_FAILURE) {
     return (
@@ -120,7 +306,7 @@ function InteractivePinMapCanvas({
         <MapViewportSync
           pinPosition={pinPosition}
           suggestedCenter={suggestedCenter}
-          gpsFocusNonce={gpsFocusNonce}
+          focusNonce={focusNonce}
         />
         {pinPosition && (
           <AdvancedMarker
@@ -147,7 +333,7 @@ export function GoogleMapPinPicker({
   const apiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '').trim();
   const [locating, setLocating] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
-  const [gpsFocusNonce, setGpsFocusNonce] = useState(0);
+  const [focusNonce, setFocusNonce] = useState(0);
 
   const pinPosition = useMemo(() => {
     if (!lat || !lng) return null;
@@ -157,7 +343,7 @@ export function GoogleMapPinPicker({
     return { lat: parsedLat, lng: parsedLng };
   }, [lat, lng]);
 
-  const applyCoordinates = (rawLat: number, rawLng: number, fromGps = false) => {
+  const applyCoordinates = (rawLat: number, rawLng: number, shouldFocusMap = false) => {
     const normalized = normalizePinnedCoordinates(rawLat, rawLng);
     if (!normalized.valid) {
       setLocalError(normalized.error || 'Pinned location must fall within India.');
@@ -165,8 +351,8 @@ export function GoogleMapPinPicker({
     }
     setLocalError(null);
     onChange(normalized.lat, normalized.lng);
-    if (fromGps) {
-      setGpsFocusNonce((n) => n + 1);
+    if (shouldFocusMap) {
+      setFocusNonce((n) => n + 1);
     }
   };
 
@@ -209,7 +395,7 @@ export function GoogleMapPinPicker({
             Optional: Pin Problem Location on Google Maps
           </p>
           <p className="mt-0.5 text-xs text-[#4B5563]">
-            At the site? Pin your live GPS position or tap/drag on the map to mark the exact spot. You can also skip this step.
+            At the site? Pin your live GPS position, search any Uttarakhand village/landmark, or tap/drag on the map.
           </p>
         </div>
 
@@ -244,18 +430,23 @@ export function GoogleMapPinPicker({
       {apiKey ? (
         <APIProvider
           apiKey={apiKey}
-          libraries={['marker']}
+          libraries={['marker', 'places']}
           language="en"
           region="IN"
-          internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
         >
-          <InteractivePinMapCanvas
-            pinPosition={pinPosition}
-            suggestedCenter={suggestedCenter}
-            gpsFocusNonce={gpsFocusNonce}
-            onMapClick={(nextLat, nextLng) => applyCoordinates(nextLat, nextLng)}
-            onMarkerDragEnd={(nextLat, nextLng) => applyCoordinates(nextLat, nextLng)}
-          />
+          <div className="space-y-3">
+            <GoogleMapsPlaceSearch
+              suggestedCenter={suggestedCenter}
+              onPlaceCoordinates={(nextLat, nextLng) => applyCoordinates(nextLat, nextLng, true)}
+            />
+            <InteractivePinMapCanvas
+              pinPosition={pinPosition}
+              suggestedCenter={suggestedCenter}
+              focusNonce={focusNonce}
+              onMapClick={(nextLat, nextLng) => applyCoordinates(nextLat, nextLng)}
+              onMarkerDragEnd={(nextLat, nextLng) => applyCoordinates(nextLat, nextLng)}
+            />
+          </div>
         </APIProvider>
       ) : (
         <div className="flex h-52 w-full flex-col items-center justify-center rounded-xl border border-dashed border-[#CBD5E1] bg-[#F7F6F2] px-6 text-center">
@@ -286,8 +477,8 @@ export function GoogleMapPinPicker({
           </span>
         ) : (
           <span>
-            Optional: Tap anywhere on the map or use <strong>Pin My Current Location</strong> when you are at the site.
-            Exact pinned coordinates are visible only to moderators.
+            Optional: Search any Uttarakhand place, tap the map, or use <strong>Pin My Current Location</strong> when you
+            are at the site. Exact pinned coordinates are visible only to moderators.
           </span>
         )}
       </div>

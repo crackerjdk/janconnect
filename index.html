@@ -3,6 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        var isExt = function (s, st, m) {
+          var t = (s || '') + '\n' + (st || '') + '\n' + (m || '');
+          return t.indexOf('chrome-extension://') !== -1 || t.indexOf('moz-extension://') !== -1 || t.indexOf('Failed to connect to MetaMask') !== -1;
+        };
+        window.addEventListener('error', function (e) {
+          var st = e && e.error && e.error.stack ? e.error.stack : '';
+          if (isExt(e && e.filename, st, e && e.message)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e && e.reason;
+          var msg = r && r.message ? r.message : String(r || '');
+          var st = r && r.stack ? r.stack : '';
+          if (isExt('', st, msg)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
     <title>जनConnect — Your Voice. Your State. Your Accountability.</title>
     <meta name="description" content="An independent civic reporting and community visibility platform starting in Uttarakhand, India." />
     <meta property="og:title" content="जनConnect — Your Voice. Your State. Your Accountability." />

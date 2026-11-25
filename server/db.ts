@@ -204,6 +204,28 @@ export function initDatabase(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient_id, is_read);
 
+    CREATE TABLE IF NOT EXISTS contractor_bids (
+      id TEXT PRIMARY KEY,
+      complaint_id TEXT NOT NULL REFERENCES complaints(id) ON DELETE CASCADE,
+      contractor_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      company_name TEXT NOT NULL,
+      registration_number TEXT NOT NULL,
+      bid_amount_inr INTEGER NOT NULL,
+      estimated_days INTEGER NOT NULL,
+      warranty_months INTEGER NOT NULL DEFAULT 12,
+      proposal_summary TEXT NOT NULL,
+      bid_status TEXT NOT NULL DEFAULT 'submitted' CHECK (bid_status IN ('submitted', 'shortlisted', 'awarded', 'rejected', 'withdrawn')),
+      reviewer_note TEXT,
+      reviewed_by TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+      reviewed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (complaint_id, contractor_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_contractor_bids_complaint ON contractor_bids(complaint_id);
+    CREATE INDEX IF NOT EXISTS idx_contractor_bids_contractor ON contractor_bids(contractor_id);
+    CREATE INDEX IF NOT EXISTS idx_contractor_bids_status ON contractor_bids(bid_status);
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,
       actor_id TEXT REFERENCES profiles(id),

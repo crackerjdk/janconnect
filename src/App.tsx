@@ -6,6 +6,7 @@ import { ReportDraftProvider } from './context/ReportDraftContext';
 
 import { LandingPage } from './pages/LandingPage';
 import { ExplorePage } from './pages/ExplorePage';
+import { ContractorBiddingPage } from './pages/ContractorBiddingPage';
 import { ReportDetailPage } from './pages/ReportDetailPage';
 import { SafetyCentrePage } from './pages/SafetyCentrePage';
 import { LoginPage, ResetPasswordPage, SignupPage, VerifyIdentityPage, VerifyPhonePage } from './pages/AuthPages';
@@ -85,6 +86,7 @@ export default function App() {
               {/* Public Routes */}
               <Route path="/" element={<LandingPage />} />
               <Route path="/explore" element={<ExplorePage />} />
+              <Route path="/contractors" element={<ContractorBiddingPage />} />
               <Route path="/reports/:id" element={<ReportDetailPage />} />
               <Route path="/signup" element={<SignupPage />} />
               <Route path="/login" element={<LoginPage />} />

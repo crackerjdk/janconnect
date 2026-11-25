@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ThumbsUp, MessageSquare, MapPin, Image as ImageIcon } from 'lucide-react';
+import { ThumbsUp, MessageSquare, MapPin, Image as ImageIcon, Briefcase } from 'lucide-react';
 import type { PublicReportSummary } from '../../types/civic';
+import { formatInrCurrency } from '../../utils/civicRules';
 import { StatusLabel } from '../ui/StatusLabel';
 
 interface ReportCardProps {
@@ -24,6 +25,8 @@ export function ReportCard({ report, onToggleSupport, supportPending }: ReportCa
         month: 'short',
         year: 'numeric',
       });
+
+  const bidCount = report.bid_count ?? 0;
 
   return (
     <article className="rounded-xl border border-[#E2E6EC] bg-white p-5 transition-colors hover:border-[#CBD5E1]">
@@ -54,7 +57,7 @@ export function ReportCard({ report, onToggleSupport, supportPending }: ReportCa
           </div>
 
           <div className="mt-4 pt-3 border-t border-[#E2E6EC] flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-4">
               {onToggleSupport ? (
                 <button
                   type="button"
@@ -86,6 +89,21 @@ export function ReportCard({ report, onToggleSupport, supportPending }: ReportCa
                 <MessageSquare className="w-3.5 h-3.5" aria-hidden="true" />
                 <span className="font-mono tabular-nums">{report.comment_count}</span>
                 <span>comments</span>
+              </Link>
+
+              <Link
+                to={`/reports/${report.id}#bidding`}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-[#0D7A6F] hover:text-[#0F2942] whitespace-nowrap"
+              >
+                <Briefcase className="w-3.5 h-3.5" aria-hidden="true" />
+                {bidCount > 0 ? (
+                  <span>
+                    <span className="font-mono tabular-nums">{bidCount}</span> {bidCount === 1 ? 'bid' : 'bids'}
+                    {report.lowest_bid_inr != null ? ` · Low ${formatInrCurrency(report.lowest_bid_inr)}` : ''}
+                  </span>
+                ) : (
+                  <span>Bid for work</span>
+                )}
               </Link>
             </div>
 

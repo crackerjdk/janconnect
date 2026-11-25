@@ -4,10 +4,12 @@ import {
   canModeratorTransition,
   detectPotentialPiiHints,
   formatGeneralizedLocation,
+  formatInrCurrency,
   isPubliclyVisible,
   STATUS_LABELS,
   validateAttachmentMetadata,
   validateCommentContent,
+  validateContractorBid,
   validateNewPassword,
   validateReportDraft,
   validateResetEmail,
@@ -165,4 +167,34 @@ test('normalizePinnedCoordinates formats valid Uttarakhand pins and rejects out-
 
   const invalidNum = normalizePinnedCoordinates(Number.NaN, 78.0);
   assert.equal(invalidNum.valid, false);
+});
+
+test('validateContractorBid validates firm quotation fields and formatInrCurrency formats INR cleanly', () => {
+  const validBid = validateContractorBid({
+    companyName: 'Garhwal Civil Works & Infra',
+    registrationNumber: 'UK-PWD-C-4821',
+    bidAmountInr: 145000,
+    estimatedDays: 14,
+    warrantyMonths: 24,
+    proposalSummary: 'Full excavation, M25 RCC slab replacement, stone pitching, and stormwater grating.',
+  });
+  assert.equal(validBid.valid, true);
+  assert.deepEqual(validBid.errors, {});
+  assert.equal(formatInrCurrency(145000), '₹1,45,000');
+
+  const invalidBid = validateContractorBid({
+    companyName: 'AB',
+    registrationNumber: '!',
+    bidAmountInr: 100,
+    estimatedDays: 0,
+    warrantyMonths: -1,
+    proposalSummary: 'Too short',
+  });
+  assert.equal(invalidBid.valid, false);
+  assert.ok(invalidBid.errors.companyName);
+  assert.ok(invalidBid.errors.registrationNumber);
+  assert.ok(invalidBid.errors.bidAmountInr);
+  assert.ok(invalidBid.errors.estimatedDays);
+  assert.ok(invalidBid.errors.warrantyMonths);
+  assert.ok(invalidBid.errors.proposalSummary);
 });

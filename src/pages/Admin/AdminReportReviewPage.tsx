@@ -7,8 +7,8 @@ import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/ui/LoadingSkeleton';
 import { apiFetch } from '../../services/api';
 import { useToast } from '../../context/ToastContext';
-import type { MediaAsset } from '../../types/civic';
-import type { ModerationActionType, PlatformStatus } from '../../utils/civicRules';
+import type { ContractorBid, MediaAsset } from '../../types/civic';
+import { BID_STATUS_LABELS, formatInrCurrency, type ModerationActionType, type PlatformStatus } from '../../utils/civicRules';
 
 interface AdminReportDetail {
   id: string;
@@ -40,6 +40,8 @@ export function AdminReportReviewPage() {
   const [duplicates, setDuplicates] = useState<
     Array<{ id: string; title: string; platform_status: PlatformStatus; generalized_location: string }>
   >([]);
+  const [bids, setBids] = useState<ContractorBid[]>([]);
+  const [bidBusyId, setBidBusyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [reason, setReason] = useState('');
@@ -67,17 +69,35 @@ export function AdminReportReviewPage() {
         media: MediaAsset[];
         actions: typeof actions;
         potentialDuplicates: typeof duplicates;
+        bids?: ContractorBid[];
       }>(`/api/admin/reports/${id}`);
       setReport(res.report);
       setMedia(res.media);
       setActions(res.actions);
       setDuplicates(res.potentialDuplicates);
+      setBids(res.bids || []);
     } catch (err) {
       showToast((err as Error).message, 'error');
     } finally {
       setLoading(false);
     }
   }, [id, showToast]);
+
+  const handleReviewBid = async (bidId: string, decision: 'shortlist' | 'award' | 'reject') => {
+    setBidBusyId(bidId);
+    try {
+      await apiFetch(`/api/admin/bids/${bidId}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+      });
+      showToast(`Contractor bid marked ${decision}.`, 'success');
+      await loadDetail();
+    } catch (err) {
+      showToast((err as Error).message, 'error');
+    } finally {
+      setBidBusyId(null);
+    }
+  };
 
   useEffect(() => {
     void loadDetail();
@@ -172,6 +192,72 @@ export function AdminReportReviewPage() {
                       ))}
                     </div>
                   </div>
+                )}
+              </section>
+
+              {/* Contractor Bids on This Report */}
+              <section className="rounded-xl border border-[#E2E6EC] bg-white p-5 space-y-3">
+                <h2 className="font-display text-sm font-semibold text-[#0F2942]">
+                  Contractor Work Bids ({bids.length})
+                </h2>
+                {bids.length === 0 ? (
+                  <p className="text-xs text-[#6B7280]">No contractor bids submitted on this report yet.</p>
+                ) : (
+                  <ul className="divide-y divide-[#E2E6EC] text-xs">
+                    {bids.map((b) => (
+                      <li key={b.id} className="py-3 space-y-2">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="font-semibold text-[#0F2942]">
+                              {b.company_name} ({b.registration_number})
+                            </p>
+                            <p className="text-[#4B5563]">
+                              @{b.contractor_username} · {BID_STATUS_LABELS[b.bid_status].label}
+                            </p>
+                          </div>
+                          <div className="text-right font-mono tabular-nums">
+                            <p className="font-bold text-[#0F2942]">{formatInrCurrency(b.bid_amount_inr)}</p>
+                            <p className="text-[#6B7280]">
+                              {b.estimated_days}d · {b.warranty_months}m warranty
+                            </p>
+                          </div>
+                        </div>
+                        <p className="text-[#374151]">{b.proposal_summary}</p>
+                        {b.bid_status !== 'awarded' && (
+                          <div className="flex items-center gap-2">
+                            {b.bid_status !== 'shortlisted' && (
+                              <button
+                                type="button"
+                                disabled={bidBusyId === b.id}
+                                onClick={() => handleReviewBid(b.id, 'shortlist')}
+                                className="rounded border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-950"
+                              >
+                                Shortlist
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={bidBusyId === b.id}
+                              onClick={() => handleReviewBid(b.id, 'award')}
+                              className="rounded bg-[#0D7A6F] px-2.5 py-1 font-semibold text-white"
+                            >
+                              Award Work
+                            </button>
+                            {b.bid_status !== 'rejected' && (
+                              <button
+                                type="button"
+                                disabled={bidBusyId === b.id}
+                                onClick={() => handleReviewBid(b.id, 'reject')}
+                                className="rounded border border-red-200 bg-red-50 px-2.5 py-1 font-semibold text-red-700"
+                              >
+                                Reject
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </section>
 

@@ -41,10 +41,12 @@ import { runModeratorAiAssist } from './server/ai';
 import {
   canModeratorTransition,
   formatGeneralizedLocation,
+  formatInrCurrency,
   type ModerationActionType,
   MAX_ATTACHMENT_BYTES,
   type PlatformStatus,
   validateCommentContent,
+  validateContractorBid,
   validateReportDraft,
   validateUsername,
 } from './src/utils/civicRules';
@@ -94,7 +96,49 @@ app.get('/api/health', (_req, res) => {
 
 // Hierarchical Locations (India -> State -> District -> Block -> Locality)
 app.get('/api/locations', (req, res) => {
-  const { type, parent_id, state_code } = req.query;
+  const { type, parent_id, state_code, q } = req.query;
+
+  if (typeof q === 'string' && q.trim().length >= 2) {
+    const term = `%${q.trim()}%`;
+    const matched = db
+      .prepare(`
+        SELECT id, parent_id, name, type, state_code, latitude, longitude
+        FROM locations
+        WHERE type IN ('locality', 'block', 'district') AND name LIKE ?
+        ORDER BY CASE type WHEN 'locality' THEN 0 WHEN 'block' THEN 1 ELSE 2 END, name ASC
+        LIMIT 25
+      `)
+      .all(term) as Array<{
+      id: string;
+      parent_id: string | null;
+      name: string;
+      type: string;
+      state_code: string | null;
+      latitude: number | null;
+      longitude: number | null;
+    }>;
+
+    const results = matched.map((m) => {
+      const pathInfo = buildLocationPath(m.id);
+      return {
+        ...m,
+        state_id: pathInfo.stateId,
+        district_id: pathInfo.districtId,
+        district_name: pathInfo.district,
+        block_id: pathInfo.blockId,
+        block_name: pathInfo.block,
+        generalized_label: formatGeneralizedLocation({
+          locality: pathInfo.locality,
+          block: pathInfo.block,
+          district: pathInfo.district,
+          state: pathInfo.state || 'Uttarakhand',
+        }),
+      };
+    });
+    res.json({ locations: results });
+    return;
+  }
+
   let sql = `SELECT id, parent_id, name, type, state_code, latitude, longitude FROM locations WHERE 1=1`;
   const params: unknown[] = [];
   if (typeof type === 'string' && type) {
@@ -117,8 +161,10 @@ app.get('/api/locations', (req, res) => {
 function buildLocationPath(locationId: string): {
   locality: string | null;
   block: string | null;
+  blockId: string | null;
   district: string | null;
   state: string | null;
+  stateId: string | null;
   districtId: string | null;
 } {
   const map = new Map<string, { id: string; parent_id: string | null; name: string; type: string }>();
@@ -133,21 +179,29 @@ function buildLocationPath(locationId: string): {
   let curr = map.get(locationId);
   let locality: string | null = null;
   let block: string | null = null;
+  let blockId: string | null = null;
   let district: string | null = null;
   let districtId: string | null = null;
   let state: string | null = null;
+  let stateId: string | null = null;
 
   while (curr) {
     if (curr.type === 'locality') locality = curr.name;
-    if (curr.type === 'block') block = curr.name;
+    if (curr.type === 'block') {
+      block = curr.name;
+      blockId = curr.id;
+    }
     if (curr.type === 'district') {
       district = curr.name;
       districtId = curr.id;
     }
-    if (curr.type === 'state') state = curr.name;
+    if (curr.type === 'state') {
+      state = curr.name;
+      stateId = curr.id;
+    }
     curr = curr.parent_id ? map.get(curr.parent_id) : undefined;
   }
-  return { locality, block, district, state, districtId };
+  return { locality, block, blockId, district, state, stateId, districtId };
 }
 
 // =========================================================================
@@ -816,6 +870,9 @@ app.get('/api/reports/public', (req: AuthedRequest, res) => {
         c.published_at,
         (SELECT COUNT(*) FROM complaint_support s WHERE s.complaint_id = c.id) AS support_count,
         (SELECT COUNT(*) FROM complaint_comments cm WHERE cm.complaint_id = c.id AND cm.moderation_status = 'approved') AS comment_count,
+        (SELECT COUNT(*) FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status != 'withdrawn') AS bid_count,
+        (SELECT MIN(cb.bid_amount_inr) FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status IN ('submitted', 'shortlisted', 'awarded')) AS lowest_bid_inr,
+        (SELECT cb.id FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status = 'awarded' LIMIT 1) AS awarded_bid_id,
         (SELECT m.id FROM complaint_media m WHERE m.complaint_id = c.id AND m.review_status = 'approved' LIMIT 1) AS preview_media_id,
         (SELECT m.media_type FROM complaint_media m WHERE m.complaint_id = c.id AND m.review_status = 'approved' LIMIT 1) AS preview_media_type
       FROM complaints c
@@ -903,6 +960,38 @@ app.get('/api/reports/public/:id', (req: AuthedRequest, res) => {
     `)
     .all(req.params.id);
 
+  const bids = db
+    .prepare(`
+      SELECT
+        cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
+        cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
+        p.username AS contractor_username, p.display_name AS contractor_display_name
+      FROM contractor_bids cb
+      JOIN profiles p ON p.id = cb.contractor_id
+      WHERE cb.complaint_id = ? AND cb.bid_status != 'withdrawn'
+      ORDER BY
+        CASE cb.bid_status WHEN 'awarded' THEN 0 WHEN 'shortlisted' THEN 1 WHEN 'submitted' THEN 2 ELSE 3 END,
+        cb.bid_amount_inr ASC,
+        cb.created_at ASC
+    `)
+    .all(req.params.id);
+
+  const myBid = req.user
+    ? db
+        .prepare(`
+          SELECT
+            cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+            cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
+            cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
+            p.username AS contractor_username, p.display_name AS contractor_display_name
+          FROM contractor_bids cb
+          JOIN profiles p ON p.id = cb.contractor_id
+          WHERE cb.complaint_id = ? AND cb.contractor_id = ?
+        `)
+        .get(req.params.id, req.user.id) ?? null
+    : null;
+
   const userHasSupported = req.user
     ? Boolean(
         db
@@ -923,6 +1012,8 @@ app.get('/api/reports/public/:id', (req: AuthedRequest, res) => {
     },
     comments,
     history,
+    bids,
+    myBid,
   });
 });
 
@@ -1020,6 +1111,286 @@ app.post('/api/reports/:id/comments', requireAuth, (req: AuthedRequest, res) => 
       author_display_name: req.user!.display_name,
     },
   });
+});
+
+// =========================================================================
+// CONTRACTOR WORK BIDDING & QUOTATIONS
+// =========================================================================
+
+app.get('/api/contractors/works', (req: AuthedRequest, res) => {
+  const { q, category, district_id, bid_state } = req.query;
+
+  let where = `WHERE c.platform_status = 'published' AND c.visibility = 'public'`;
+  const params: unknown[] = [];
+
+  if (typeof q === 'string' && q.trim()) {
+    const term = `%${q.trim()}%`;
+    where += ` AND (c.title LIKE ? OR c.description LIKE ? OR c.generalized_location LIKE ?)`;
+    params.push(term, term, term);
+  }
+  if (typeof category === 'string' && category && category !== 'all') {
+    where += ` AND c.category = ?`;
+    params.push(category);
+  }
+  if (typeof district_id === 'string' && district_id) {
+    where += ` AND c.location_id IN (
+      WITH RECURSIVE tree(id) AS (
+        SELECT id FROM locations WHERE id = ?
+        UNION ALL
+        SELECT l.id FROM locations l JOIN tree t ON l.parent_id = t.id
+      )
+      SELECT id FROM tree
+    )`;
+    params.push(district_id);
+  }
+  if (bid_state === 'awarded') {
+    where += ` AND EXISTS (SELECT 1 FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status = 'awarded')`;
+  } else if (bid_state === 'open') {
+    where += ` AND NOT EXISTS (SELECT 1 FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status = 'awarded')`;
+  }
+
+  const rows = db
+    .prepare(`
+      SELECT
+        c.id,
+        c.title,
+        c.description,
+        c.category,
+        c.location_id,
+        c.generalized_location,
+        c.platform_status,
+        c.created_at,
+        c.published_at,
+        (SELECT COUNT(*) FROM complaint_support s WHERE s.complaint_id = c.id) AS support_count,
+        (SELECT COUNT(*) FROM complaint_comments cm WHERE cm.complaint_id = c.id AND cm.moderation_status = 'approved') AS comment_count,
+        (SELECT COUNT(*) FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status != 'withdrawn') AS bid_count,
+        (SELECT MIN(cb.bid_amount_inr) FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status IN ('submitted', 'shortlisted', 'awarded')) AS lowest_bid_inr,
+        (SELECT cb.id FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status = 'awarded' LIMIT 1) AS awarded_bid_id,
+        (SELECT m.id FROM complaint_media m WHERE m.complaint_id = c.id AND m.review_status = 'approved' LIMIT 1) AS preview_media_id,
+        (SELECT m.media_type FROM complaint_media m WHERE m.complaint_id = c.id AND m.review_status = 'approved' LIMIT 1) AS preview_media_type
+      FROM complaints c
+      ${where}
+      ORDER BY
+        CASE WHEN awarded_bid_id IS NULL THEN 0 ELSE 1 END,
+        support_count DESC,
+        c.published_at DESC
+      LIMIT 60
+    `)
+    .all(...params) as Array<Record<string, unknown>>;
+
+  const stats = db
+    .prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM complaints WHERE platform_status = 'published' AND visibility = 'public') AS total_published,
+        (SELECT COUNT(*) FROM contractor_bids cb JOIN complaints c ON c.id = cb.complaint_id WHERE c.platform_status = 'published' AND cb.bid_status IN ('submitted', 'shortlisted', 'awarded')) AS total_active_bids,
+        (SELECT COUNT(DISTINCT cb.complaint_id) FROM contractor_bids cb JOIN complaints c ON c.id = cb.complaint_id WHERE c.platform_status = 'published' AND cb.bid_status = 'awarded') AS awarded_works
+    `)
+    .get() as { total_published: number; total_active_bids: number; awarded_works: number };
+
+  const enriched = rows.map((r) => {
+    const locPath = buildLocationPath(r.location_id as string);
+    return {
+      ...r,
+      district_id: locPath.districtId,
+      district_name: locPath.district,
+      preview_media_url: r.preview_media_id ? `/api/media/published/${r.preview_media_id}` : null,
+      user_has_supported: req.user
+        ? Boolean(
+            db
+              .prepare(`SELECT 1 FROM complaint_support WHERE complaint_id = ? AND user_id = ?`)
+              .get(r.id, req.user.id)
+          )
+        : false,
+    };
+  });
+
+  res.json({
+    works: enriched,
+    stats: {
+      openWorksCount: Math.max(0, (stats.total_published || 0) - (stats.awarded_works || 0)),
+      totalActiveBids: stats.total_active_bids || 0,
+      awardedWorksCount: stats.awarded_works || 0,
+    },
+  });
+});
+
+app.get('/api/contractors/my-bids', requireAuth, (req: AuthedRequest, res) => {
+  const bids = db
+    .prepare(`
+      SELECT
+        cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
+        cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
+        p.username AS contractor_username, p.display_name AS contractor_display_name,
+        c.title AS report_title, c.category AS report_category, c.generalized_location
+      FROM contractor_bids cb
+      JOIN profiles p ON p.id = cb.contractor_id
+      JOIN complaints c ON c.id = cb.complaint_id
+      WHERE cb.contractor_id = ?
+      ORDER BY cb.updated_at DESC
+    `)
+    .all(req.user!.id);
+
+  res.json({ bids });
+});
+
+app.post('/api/reports/:id/bids', requireAuth, (req: AuthedRequest, res) => {
+  const userId = req.user!.id;
+  if (!checkRateLimit(`bid:${userId}`, 15, 30 * 60 * 1000)) {
+    res.status(429).json({ error: 'Bid submission limit reached. Please wait before submitting again.' });
+    return;
+  }
+
+  const report = db
+    .prepare(`SELECT id, user_id, title FROM complaints WHERE id = ? AND platform_status = 'published' AND visibility = 'public'`)
+    .get(req.params.id) as { id: string; user_id: string; title: string } | undefined;
+
+  if (!report) {
+    res.status(404).json({ error: 'Published civic report not found for contractor bidding.' });
+    return;
+  }
+
+  const awardedOther = db
+    .prepare(`SELECT id, contractor_id FROM contractor_bids WHERE complaint_id = ? AND bid_status = 'awarded'`)
+    .get(report.id) as { id: string; contractor_id: string } | undefined;
+
+  if (awardedOther) {
+    res.status(409).json({ error: 'Work for this reported problem has already been awarded to a contractor.' });
+    return;
+  }
+
+  const body = req.body as {
+    companyName?: string;
+    registrationNumber?: string;
+    bidAmountInr?: number | string;
+    estimatedDays?: number | string;
+    warrantyMonths?: number | string;
+    proposalSummary?: string;
+  };
+
+  const validation = validateContractorBid({
+    companyName: body.companyName || '',
+    registrationNumber: body.registrationNumber || '',
+    bidAmountInr: Number(body.bidAmountInr),
+    estimatedDays: Number(body.estimatedDays),
+    warrantyMonths: Number(body.warrantyMonths ?? 12),
+    proposalSummary: body.proposalSummary || '',
+  });
+
+  if (!validation.valid) {
+    res.status(400).json({ error: Object.values(validation.errors)[0], errors: validation.errors });
+    return;
+  }
+
+  const companyName = (body.companyName || '').trim();
+  const registrationNumber = (body.registrationNumber || '').trim().toUpperCase();
+  const bidAmountInr = Math.round(Number(body.bidAmountInr));
+  const estimatedDays = Math.round(Number(body.estimatedDays));
+  const warrantyMonths = Math.round(Number(body.warrantyMonths ?? 12));
+  const proposalSummary = (body.proposalSummary || '').trim();
+
+  const existing = db
+    .prepare(`SELECT id, bid_status FROM contractor_bids WHERE complaint_id = ? AND contractor_id = ?`)
+    .get(report.id, userId) as { id: string; bid_status: string } | undefined;
+
+  if (existing && existing.bid_status === 'awarded') {
+    res.status(409).json({ error: 'Awarded contractor bids cannot be edited.' });
+    return;
+  }
+
+  const bidId = existing ? existing.id : crypto.randomUUID();
+
+  const tx = db.transaction(() => {
+    if (existing) {
+      db.prepare(`
+        UPDATE contractor_bids
+        SET
+          company_name = ?,
+          registration_number = ?,
+          bid_amount_inr = ?,
+          estimated_days = ?,
+          warranty_months = ?,
+          proposal_summary = ?,
+          bid_status = 'submitted',
+          reviewer_note = NULL,
+          reviewed_by = NULL,
+          reviewed_at = NULL,
+          updated_at = datetime('now')
+        WHERE id = ?
+      `).run(companyName, registrationNumber, bidAmountInr, estimatedDays, warrantyMonths, proposalSummary, bidId);
+    } else {
+      db.prepare(`
+        INSERT INTO contractor_bids (
+          id, complaint_id, contractor_id, company_name, registration_number,
+          bid_amount_inr, estimated_days, warranty_months, proposal_summary, bid_status
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted')
+      `).run(bidId, report.id, userId, companyName, registrationNumber, bidAmountInr, estimatedDays, warrantyMonths, proposalSummary);
+    }
+
+    if (report.user_id !== userId) {
+      db.prepare(`
+        INSERT INTO notifications (id, recipient_id, type, related_id, message)
+        VALUES (?, ?, 'new_contractor_bid', ?, ?)
+      `).run(
+        crypto.randomUUID(),
+        report.user_id,
+        report.id,
+        `${companyName} submitted a ${formatInrCurrency(bidAmountInr)} contractor quotation (${estimatedDays} days) for "${report.title}".`
+      );
+    }
+  });
+  tx();
+
+  writeAuditLog({
+    actorId: userId,
+    action: existing ? 'contractor_bid_updated' : 'contractor_bid_submitted',
+    targetType: 'contractor_bid',
+    targetId: bidId,
+    metadata: { complaint_id: report.id, bid_amount_inr: bidAmountInr, estimated_days: estimatedDays },
+  });
+
+  const saved = db
+    .prepare(`
+      SELECT
+        cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
+        cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
+        p.username AS contractor_username, p.display_name AS contractor_display_name
+      FROM contractor_bids cb
+      JOIN profiles p ON p.id = cb.contractor_id
+      WHERE cb.id = ?
+    `)
+    .get(bidId);
+
+  res.status(existing ? 200 : 201).json({ bid: saved });
+});
+
+app.delete('/api/reports/:id/bids', requireAuth, (req: AuthedRequest, res) => {
+  const userId = req.user!.id;
+  const existing = db
+    .prepare(`SELECT id, bid_status FROM contractor_bids WHERE complaint_id = ? AND contractor_id = ?`)
+    .get(req.params.id, userId) as { id: string; bid_status: string } | undefined;
+
+  if (!existing) {
+    res.status(404).json({ error: 'No contractor bid found for your account on this report.' });
+    return;
+  }
+  if (existing.bid_status === 'awarded') {
+    res.status(409).json({ error: 'An awarded bid cannot be withdrawn directly. Contact a moderator.' });
+    return;
+  }
+
+  db.prepare(`UPDATE contractor_bids SET bid_status = 'withdrawn', updated_at = datetime('now') WHERE id = ?`).run(existing.id);
+  writeAuditLog({
+    actorId: userId,
+    action: 'contractor_bid_withdrawn',
+    targetType: 'contractor_bid',
+    targetId: existing.id,
+    metadata: { complaint_id: req.params.id },
+  });
+
+  res.json({ ok: true });
 });
 
 // Content / Safety Reporting
@@ -1496,6 +1867,10 @@ app.get('/api/admin/analytics', requireModerator, (_req, res) => {
     .prepare(`SELECT COUNT(*) AS count FROM verification_records WHERE verification_status = 'pending' AND id_type IS NOT NULL`)
     .get() as { count: number };
 
+  const activeBids = db
+    .prepare(`SELECT COUNT(*) AS count FROM contractor_bids WHERE bid_status IN ('submitted', 'shortlisted', 'awarded')`)
+    .get() as { count: number };
+
   const byCategory = db
     .prepare(`SELECT category, COUNT(*) AS count FROM complaints GROUP BY category ORDER BY count DESC`)
     .all();
@@ -1520,6 +1895,7 @@ app.get('/api/admin/analytics', requireModerator, (_req, res) => {
       removedReports: counts.removed_reports || 0,
       reportedContent: reportedContent.count || 0,
       pendingVerifications: pendingVerifications.count || 0,
+      activeBids: activeBids.count || 0,
     },
     byCategory,
     byDistrict,
@@ -1693,6 +2069,22 @@ app.get('/api/admin/reports/:id', requireModerator, (req, res) => {
     `)
     .all(req.params.id, report.category);
 
+  const bids = db
+    .prepare(`
+      SELECT
+        cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
+        cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
+        p.username AS contractor_username, p.display_name AS contractor_display_name
+      FROM contractor_bids cb
+      JOIN profiles p ON p.id = cb.contractor_id
+      WHERE cb.complaint_id = ? AND cb.bid_status != 'withdrawn'
+      ORDER BY
+        CASE cb.bid_status WHEN 'awarded' THEN 0 WHEN 'shortlisted' THEN 1 WHEN 'submitted' THEN 2 ELSE 3 END,
+        cb.bid_amount_inr ASC
+    `)
+    .all(req.params.id);
+
   res.json({
     report,
     media: media.map((m) => ({
@@ -1702,7 +2094,146 @@ app.get('/api/admin/reports/:id', requireModerator, (req, res) => {
     actions,
     history,
     potentialDuplicates,
+    bids,
   });
+});
+
+app.get('/api/admin/bids', requireModerator, (req, res) => {
+  const { status } = req.query;
+  let where = `WHERE cb.bid_status != 'withdrawn'`;
+  const params: unknown[] = [];
+
+  if (typeof status === 'string' && ['submitted', 'shortlisted', 'awarded', 'rejected'].includes(status)) {
+    where += ` AND cb.bid_status = ?`;
+    params.push(status);
+  }
+
+  const rows = db
+    .prepare(`
+      SELECT
+        cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
+        cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
+        p.username AS contractor_username, p.display_name AS contractor_display_name,
+        c.title AS report_title, c.category AS report_category, c.generalized_location
+      FROM contractor_bids cb
+      JOIN profiles p ON p.id = cb.contractor_id
+      JOIN complaints c ON c.id = cb.complaint_id
+      ${where}
+      ORDER BY
+        CASE cb.bid_status WHEN 'submitted' THEN 0 WHEN 'shortlisted' THEN 1 WHEN 'awarded' THEN 2 ELSE 3 END,
+        cb.created_at DESC
+      LIMIT 120
+    `)
+    .all(...params);
+
+  res.json({ bids: rows });
+});
+
+app.post('/api/admin/bids/:bidId/review', requireModerator, (req: AuthedRequest, res) => {
+  const { decision, note } = req.body as { decision?: 'shortlist' | 'award' | 'reject'; note?: string };
+  if (!decision || !['shortlist', 'award', 'reject'].includes(decision)) {
+    res.status(400).json({ error: 'Decision must be shortlist, award, or reject.' });
+    return;
+  }
+
+  const bid = db
+    .prepare(`
+      SELECT cb.*, c.title AS report_title, c.user_id AS report_author_id
+      FROM contractor_bids cb
+      JOIN complaints c ON c.id = cb.complaint_id
+      WHERE cb.id = ?
+    `)
+    .get(req.params.bidId) as
+    | {
+        id: string;
+        complaint_id: string;
+        contractor_id: string;
+        company_name: string;
+        bid_amount_inr: number;
+        bid_status: string;
+        report_title: string;
+        report_author_id: string;
+      }
+    | undefined;
+
+  if (!bid) {
+    res.status(404).json({ error: 'Contractor bid not found.' });
+    return;
+  }
+  if (bid.bid_status === 'withdrawn') {
+    res.status(409).json({ error: 'Withdrawn bids cannot be reviewed.' });
+    return;
+  }
+
+  const nextStatus = decision === 'award' ? 'awarded' : decision === 'shortlist' ? 'shortlisted' : 'rejected';
+  const cleanNote = (note || '').trim() || (
+    decision === 'award'
+      ? 'Selected for civic work execution review.'
+      : decision === 'shortlist'
+      ? 'Shortlisted for scope verification.'
+      : 'Not selected in this bidding round.'
+  );
+
+  const tx = db.transaction(() => {
+    if (decision === 'award') {
+      db.prepare(`
+        UPDATE contractor_bids
+        SET
+          bid_status = 'rejected',
+          reviewer_note = COALESCE(reviewer_note, 'Another contractor bid was selected for this work.'),
+          reviewed_by = ?,
+          reviewed_at = datetime('now'),
+          updated_at = datetime('now')
+        WHERE complaint_id = ? AND id != ? AND bid_status IN ('submitted', 'shortlisted', 'awarded')
+      `).run(req.user!.id, bid.complaint_id, bid.id);
+    }
+
+    db.prepare(`
+      UPDATE contractor_bids
+      SET
+        bid_status = ?,
+        reviewer_note = ?,
+        reviewed_by = ?,
+        reviewed_at = datetime('now'),
+        updated_at = datetime('now')
+      WHERE id = ?
+    `).run(nextStatus, cleanNote, req.user!.id, bid.id);
+
+    db.prepare(`
+      INSERT INTO notifications (id, recipient_id, type, related_id, message)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      crypto.randomUUID(),
+      bid.contractor_id,
+      `contractor_bid_${nextStatus}`,
+      bid.complaint_id,
+      `Your contractor bid (${bid.company_name}, ${formatInrCurrency(bid.bid_amount_inr)}) on "${bid.report_title}" was marked ${nextStatus}: ${cleanNote}`
+    );
+
+    if (decision === 'award' && bid.report_author_id !== bid.contractor_id) {
+      db.prepare(`
+        INSERT INTO notifications (id, recipient_id, type, related_id, message)
+        VALUES (?, ?, 'contractor_work_awarded', ?, ?)
+      `).run(
+        crypto.randomUUID(),
+        bid.report_author_id,
+        bid.complaint_id,
+        `Contractor bid from ${bid.company_name} (${formatInrCurrency(bid.bid_amount_inr)}) was selected for "${bid.report_title}".`
+      );
+    }
+  });
+  tx();
+
+  writeAuditLog({
+    actorId: req.user!.id,
+    action: `contractor_bid_${decision}`,
+    targetType: 'contractor_bid',
+    targetId: bid.id,
+    metadata: { complaint_id: bid.complaint_id, next_status: nextStatus, note: cleanNote },
+  });
+
+  res.json({ ok: true, bid_status: nextStatus });
 });
 
 app.post('/api/admin/reports/:id/moderate', requireModerator, (req: AuthedRequest, res) => {

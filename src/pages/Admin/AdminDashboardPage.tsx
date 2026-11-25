@@ -1,22 +1,26 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { LayoutDashboard, Clock, CheckCircle2, Flag, History, BarChart3, Search, BadgeCheck, Eye } from 'lucide-react';
+import { LayoutDashboard, Clock, CheckCircle2, Flag, History, BarChart3, Search, BadgeCheck, Eye, Briefcase } from 'lucide-react';
 import { AppShell } from '../../components/layout/AppShell';
 import { StatusLabel } from '../../components/ui/StatusLabel';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { LoadingSkeleton } from '../../components/ui/LoadingSkeleton';
 import { apiFetch, getInMemoryToken } from '../../services/api';
 import { useToast } from '../../context/ToastContext';
-import type { AdminAnalyticsResponse, AdminReportRow, AdminVerificationRow } from '../../types/civic';
+import type { AdminAnalyticsResponse, AdminContractorBidRow, AdminReportRow, AdminVerificationRow } from '../../types/civic';
+import { BID_STATUS_LABELS, formatInrCurrency } from '../../utils/civicRules';
 import { getNationalIdLabel } from '../../utils/nationalId';
 
-type AdminTab = 'overview' | 'pending' | 'published' | 'verifications' | 'history' | 'analytics';
+type AdminTab = 'overview' | 'pending' | 'published' | 'bids' | 'verifications' | 'history' | 'analytics';
 
 export function AdminDashboardPage() {
   const { showToast } = useToast();
   const [tab, setTab] = useState<AdminTab>('overview');
   const [analytics, setAnalytics] = useState<AdminAnalyticsResponse | null>(null);
   const [reports, setReports] = useState<AdminReportRow[]>([]);
+  const [bids, setBids] = useState<AdminContractorBidRow[]>([]);
+  const [bidNotes, setBidNotes] = useState<Record<string, string>>({});
+  const [bidBusyId, setBidBusyId] = useState<string | null>(null);
   const [verifications, setVerifications] = useState<AdminVerificationRow[]>([]);
   const [verifReasons, setVerifReasons] = useState<Record<string, string>>({});
   const [verifBusyId, setVerifBusyId] = useState<string | null>(null);
@@ -40,7 +44,7 @@ export function AdminDashboardPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [anRes, repRes, histRes, verifRes] = await Promise.all([
+      const [anRes, repRes, histRes, verifRes, bidsRes] = await Promise.all([
         apiFetch<AdminAnalyticsResponse>('/api/admin/analytics'),
         apiFetch<{ reports: AdminReportRow[] }>(
           `/api/admin/reports?status=${
@@ -49,11 +53,13 @@ export function AdminDashboardPage() {
         ),
         apiFetch<{ actions: typeof historyData.actions }>('/api/admin/moderation-history'),
         apiFetch<{ verifications: AdminVerificationRow[] }>('/api/admin/verifications'),
+        apiFetch<{ bids: AdminContractorBidRow[] }>('/api/admin/bids'),
       ]);
       setAnalytics(anRes);
       setReports(repRes.reports);
       setHistoryData({ actions: histRes.actions });
       setVerifications(verifRes.verifications);
+      setBids(bidsRes.bids);
     } finally {
       setLoading(false);
     }
@@ -117,10 +123,34 @@ export function AdminDashboardPage() {
     }
   };
 
+  const handleReviewBid = async (bidId: string, decision: 'shortlist' | 'award' | 'reject') => {
+    setBidBusyId(bidId);
+    try {
+      await apiFetch(`/api/admin/bids/${bidId}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ decision, note: bidNotes[bidId] || '' }),
+      });
+      showToast(
+        decision === 'award'
+          ? 'Work awarded to contractor.'
+          : decision === 'shortlist'
+          ? 'Contractor bid shortlisted.'
+          : 'Contractor bid rejected.',
+        'success'
+      );
+      await loadData();
+    } catch (err) {
+      showToast((err as Error).message, 'error');
+    } finally {
+      setBidBusyId(null);
+    }
+  };
+
   const navItems: Array<{ key: AdminTab; label: string; icon: typeof LayoutDashboard }> = [
     { key: 'overview', label: 'Overview', icon: LayoutDashboard },
     { key: 'pending', label: 'Pending Reports', icon: Clock },
     { key: 'published', label: 'Published Reports', icon: CheckCircle2 },
+    { key: 'bids', label: `Contractor Bids (${analytics?.metrics.activeBids ?? 0})`, icon: Briefcase },
     { key: 'verifications', label: `Identity Verifications (${analytics?.metrics.pendingVerifications ?? 0})`, icon: BadgeCheck },
     { key: 'history', label: 'Moderation History', icon: History },
     { key: 'analytics', label: 'Platform Analytics', icon: BarChart3 },
@@ -263,6 +293,108 @@ export function AdminDashboardPage() {
                       </tbody>
                     </table>
                   </div>
+                )}
+              </section>
+            )}
+
+            {tab === 'bids' && (
+              <section className="rounded-xl border border-[#E2E6EC] bg-white p-5 space-y-4">
+                <div>
+                  <h2 className="font-display text-base font-semibold text-[#0F2942]">
+                    Contractor Work Bids & Quotations Review
+                  </h2>
+                  <p className="text-xs text-[#4B5563] mt-0.5">
+                    Review contractor quotations submitted on published Uttarakhand civic reports. Awarding a bid notifies
+                    the contractor and report author and logs an append-only audit entry.
+                  </p>
+                </div>
+
+                {loading ? (
+                  <LoadingSkeleton rows={3} />
+                ) : bids.length === 0 ? (
+                  <EmptyState
+                    title="No contractor bids submitted yet"
+                    description="Contractor quotations placed on published reports will appear here for review."
+                  />
+                ) : (
+                  <ul className="divide-y divide-[#E2E6EC]">
+                    {bids.map((b) => {
+                      const statusMeta = BID_STATUS_LABELS[b.bid_status];
+                      return (
+                        <li key={b.id} className="py-4 space-y-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="space-y-1">
+                              <p className="text-sm font-semibold text-[#0F2942]">
+                                {b.company_name}{' '}
+                                <span className="font-mono text-xs font-normal text-[#6B7280]">
+                                  ({b.registration_number} · @{b.contractor_username})
+                                </span>
+                              </p>
+                              <p className="text-xs text-[#374151]">
+                                For report:{' '}
+                                <Link to={`/admin/reports/${b.complaint_id}`} className="font-medium text-[#0F2942] underline">
+                                  {b.report_title}
+                                </Link>{' '}
+                                · {b.generalized_location}
+                              </p>
+                              <p className="text-xs text-[#4B5563] leading-relaxed">{b.proposal_summary}</p>
+                            </div>
+                            <div className="text-right shrink-0 space-y-0.5">
+                              <p className="font-mono text-base font-bold text-[#0F2942] tabular-nums">
+                                {formatInrCurrency(b.bid_amount_inr)}
+                              </p>
+                              <p className="font-mono text-xs text-[#4B5563] tabular-nums">
+                                {b.estimated_days} days · {b.warranty_months} mo warranty
+                              </p>
+                              <p className="text-xs font-semibold text-[#0D7A6F]">{statusMeta.label}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              type="text"
+                              value={bidNotes[b.id] || ''}
+                              onChange={(e) => setBidNotes((prev) => ({ ...prev, [b.id]: e.target.value }))}
+                              placeholder="Optional moderator note for contractor..."
+                              className="flex-1 rounded-lg border border-[#E2E6EC] px-3 py-1.5 text-xs"
+                            />
+                            <div className="flex flex-wrap items-center gap-2">
+                              {b.bid_status !== 'shortlisted' && b.bid_status !== 'awarded' && (
+                                <button
+                                  type="button"
+                                  disabled={bidBusyId === b.id}
+                                  onClick={() => handleReviewBid(b.id, 'shortlist')}
+                                  className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-50"
+                                >
+                                  Shortlist
+                                </button>
+                              )}
+                              {b.bid_status !== 'awarded' && (
+                                <button
+                                  type="button"
+                                  disabled={bidBusyId === b.id}
+                                  onClick={() => handleReviewBid(b.id, 'award')}
+                                  className="rounded-lg bg-[#0D7A6F] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0A635A] disabled:opacity-50"
+                                >
+                                  Award Work
+                                </button>
+                              )}
+                              {b.bid_status !== 'rejected' && b.bid_status !== 'awarded' && (
+                                <button
+                                  type="button"
+                                  disabled={bidBusyId === b.id}
+                                  onClick={() => handleReviewBid(b.id, 'reject')}
+                                  className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                                >
+                                  Reject
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 )}
               </section>
             )}
