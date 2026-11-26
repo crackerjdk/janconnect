@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { PlusCircle, Bell, MapPin, Compass } from 'lucide-react';
+import { PlusCircle, Bell, MapPin, Compass, CheckCircle2 } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
 import { ReportCard } from '../components/complaints/ReportCard';
 import { EmptyState } from '../components/ui/EmptyState';
 import { LoadingSkeleton } from '../components/ui/LoadingSkeleton';
 import { IndependentNotice } from '../components/ui/IndependentNotice';
+import { PinnedWorkDoneSection } from '../components/gov/PinnedWorkDoneSection';
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -135,6 +136,13 @@ export function CitizenHomePage() {
                 Complete Verification to Report
               </Link>
             )}
+            <a
+              href="#citizen-work-done"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#E2E6EC] bg-white px-3.5 py-2.5 text-sm font-semibold text-[#0F2942] hover:bg-[#F7F6F2] whitespace-nowrap"
+            >
+              <CheckCircle2 className="w-4 h-4 text-[#0D7A6F]" aria-hidden="true" />
+              <span>Work Done</span>
+            </a>
             <Link
               to="/reports/create"
               className="inline-flex items-center gap-2 rounded-lg bg-[#0D7A6F] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#0A635A] whitespace-nowrap"
@@ -144,6 +152,9 @@ export function CitizenHomePage() {
             </Link>
           </div>
         </div>
+
+        {/* Work Done Pinned by JanConnect Team near Quick Report */}
+        <PinnedWorkDoneSection id="citizen-work-done" compact />
 
         <div className="grid gap-6 lg:grid-cols-12 items-start">
           {/* Main Feed Column */}

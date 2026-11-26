@@ -8,6 +8,7 @@ import {
   isPubliclyVisible,
   STATUS_LABELS,
   validateAttachmentMetadata,
+  validateBudgetFundedBy,
   validateCommentContent,
   validateContractorBid,
   validateNewPassword,
@@ -169,7 +170,7 @@ test('normalizePinnedCoordinates formats valid Uttarakhand pins and rejects out-
   assert.equal(invalidNum.valid, false);
 });
 
-test('validateContractorBid validates firm quotation fields and formatInrCurrency formats INR cleanly', () => {
+test('validateContractorBid validates firm quotation fields, funding attribution, and INR formatting', () => {
   const validBid = validateContractorBid({
     companyName: 'Garhwal Civil Works & Infra',
     registrationNumber: 'UK-PWD-C-4821',
@@ -177,10 +178,15 @@ test('validateContractorBid validates firm quotation fields and formatInrCurrenc
     estimatedDays: 14,
     warrantyMonths: 24,
     proposalSummary: 'Full excavation, M25 RCC slab replacement, stone pitching, and stormwater grating.',
+    budgetFundedBy: 'ABC Political Party',
   });
   assert.equal(validBid.valid, true);
   assert.deepEqual(validBid.errors, {});
   assert.equal(formatInrCurrency(145000), '₹1,45,000');
+
+  assert.equal(validateBudgetFundedBy('  ').value, null);
+  assert.equal(validateBudgetFundedBy('ABC Political Party').value, 'ABC Political Party');
+  assert.equal(validateBudgetFundedBy('<script>alert(1)</script>').valid, false);
 
   const invalidBid = validateContractorBid({
     companyName: 'AB',
@@ -189,6 +195,7 @@ test('validateContractorBid validates firm quotation fields and formatInrCurrenc
     estimatedDays: 0,
     warrantyMonths: -1,
     proposalSummary: 'Too short',
+    budgetFundedBy: 'X',
   });
   assert.equal(invalidBid.valid, false);
   assert.ok(invalidBid.errors.companyName);
@@ -197,4 +204,5 @@ test('validateContractorBid validates firm quotation fields and formatInrCurrenc
   assert.ok(invalidBid.errors.estimatedDays);
   assert.ok(invalidBid.errors.warrantyMonths);
   assert.ok(invalidBid.errors.proposalSummary);
+  assert.ok(invalidBid.errors.budgetFundedBy);
 });

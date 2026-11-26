@@ -21,7 +21,7 @@ export function SiteFooter() {
           </div>
 
           <div>
-            <h4 className="text-xs font-semibold text-[#0F2942]">Platform</h4>
+            <h4 className="text-xs font-semibold text-[#0F2942]">Platform & Projects</h4>
             <ul className="mt-3 space-y-2 text-sm text-[#4B5563]">
               <li>
                 <Link to="/explore" className="hover:text-[#0F2942]">
@@ -29,8 +29,18 @@ export function SiteFooter() {
                 </Link>
               </li>
               <li>
+                <Link to="/projects" className="hover:text-[#0F2942]">
+                  Public Project Transparency
+                </Link>
+              </li>
+              <li>
+                <Link to="/contractor-registry" className="hover:text-[#0F2942]">
+                  Contractor Registry & Portfolios
+                </Link>
+              </li>
+              <li>
                 <Link to="/contractors" className="hover:text-[#0F2942]">
-                  Contractor Work Bids
+                  Community Contractor Bids
                 </Link>
               </li>
               <li>
@@ -38,9 +48,25 @@ export function SiteFooter() {
                   Report a Problem
                 </Link>
               </li>
+            </ul>
+          </div>
+
+          <div>
+            <h4 className="text-xs font-semibold text-[#0F2942]">Governance & Trust</h4>
+            <ul className="mt-3 space-y-2 text-sm text-[#4B5563]">
               <li>
-                <Link to="/signup" className="hover:text-[#0F2942]">
-                  Citizen Registration
+                <Link to="/gov" className="hover:text-[#0F2942]">
+                  Government Authority Console
+                </Link>
+              </li>
+              <li>
+                <Link to="/finance" className="hover:text-[#0F2942]">
+                  1% Facilitation Fee Dashboard
+                </Link>
+              </li>
+              <li>
+                <Link to="/finance/payment-settings" className="hover:text-[#0F2942]">
+                  Payment Gateway Settings
                 </Link>
               </li>
               <li>
@@ -48,25 +74,9 @@ export function SiteFooter() {
                   Moderator Access
                 </Link>
               </li>
-            </ul>
-          </div>
-
-          <div>
-            <h4 className="text-xs font-semibold text-[#0F2942]">Trust & Legal</h4>
-            <ul className="mt-3 space-y-2 text-sm text-[#4B5563]">
               <li>
                 <Link to="/safety" className="hover:text-[#0F2942]">
-                  Safety Centre
-                </Link>
-              </li>
-              <li>
-                <Link to="/safety#privacy" className="hover:text-[#0F2942]">
-                  Privacy Policy Placeholder
-                </Link>
-              </li>
-              <li>
-                <Link to="/safety#terms" className="hover:text-[#0F2942]">
-                  Terms of Use Placeholder
+                  Safety Centre & Disclaimers
                 </Link>
               </li>
               <li>

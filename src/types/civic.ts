@@ -1,4 +1,5 @@
 import type { BidStatus, PlatformStatus, UserRole } from '../utils/civicRules';
+import type { BudgetPaymentBreakdown } from './gov';
 
 export interface UserProfile {
   id: string;
@@ -60,6 +61,10 @@ export interface PublicReportSummary {
   bid_count?: number;
   lowest_bid_inr?: number | null;
   awarded_bid_id?: string | null;
+  awarded_amount_inr?: number | null;
+  awarded_contractor_company?: string | null;
+  awarded_budget_funded_by?: string | null;
+  awarded_payment_breakdown?: BudgetPaymentBreakdown | null;
   preview_media_url: string | null;
   preview_media_type: string | null;
   user_has_supported: boolean;
@@ -77,11 +82,13 @@ export interface ContractorBid {
   estimated_days: number;
   warranty_months: number;
   proposal_summary: string;
+  budget_funded_by?: string | null;
   bid_status: BidStatus;
   reviewer_note: string | null;
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
+  payment_breakdown?: BudgetPaymentBreakdown;
 }
 
 export interface MyContractorBid extends ContractorBid {

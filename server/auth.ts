@@ -20,7 +20,7 @@ export interface SessionUser {
   account_status: 'active' | 'restricted' | 'suspended';
   phone_verified: boolean;
   identity_status: 'unverified' | 'pending' | 'verified' | 'rejected' | 'expired';
-  roles: Array<'citizen' | 'moderator' | 'administrator'>;
+  roles: Array<'citizen' | 'moderator' | 'administrator' | 'government_authority' | 'financial_admin'>;
   created_at: string;
 }
 
@@ -141,7 +141,7 @@ export function loadSessionUser(userId: string): SessionUser | null {
 
   const roleRows = db
     .prepare(`SELECT role FROM user_roles WHERE user_id = ?`)
-    .all(userId) as Array<{ role: 'citizen' | 'moderator' | 'administrator' }>;
+    .all(userId) as Array<{ role: 'citizen' | 'moderator' | 'administrator' | 'government_authority' | 'financial_admin' }>;
 
   return {
     id: profile.id,
@@ -240,6 +240,53 @@ export function requireAdministrator(req: AuthedRequest, res: Response, next: Ne
   }
   if (!req.user.roles.includes('administrator')) {
     res.status(403).json({ error: 'Forbidden: Administrator privileges required.' });
+    return;
+  }
+  next();
+}
+
+export function requireGovernmentAuthority(req: AuthedRequest, res: Response, next: NextFunction): void {
+  if (!req.user) {
+    res.status(401).json({ error: 'Government authority authentication required.' });
+    return;
+  }
+  if (!req.user.roles.includes('government_authority')) {
+    res.status(403).json({
+      error:
+        'Forbidden: Authorised government official privileges are required. JanConnect administrators cannot approve projects or manipulate tenders.',
+    });
+    return;
+  }
+  next();
+}
+
+export function requireFinancialAdmin(req: AuthedRequest, res: Response, next: NextFunction): void {
+  if (!req.user) {
+    res.status(401).json({ error: 'Financial administrator authentication required.' });
+    return;
+  }
+  if (!req.user.roles.includes('financial_admin') && !req.user.roles.includes('administrator')) {
+    res.status(403).json({
+      error: 'Forbidden: JanConnect financial administrator privileges are required.',
+    });
+    return;
+  }
+  next();
+}
+
+export function requireAuthorityOrAdmin(req: AuthedRequest, res: Response, next: NextFunction): void {
+  if (!req.user) {
+    res.status(401).json({ error: 'Authentication required.' });
+    return;
+  }
+  const hasRole =
+    req.user.roles.includes('government_authority') ||
+    req.user.roles.includes('administrator') ||
+    req.user.roles.includes('financial_admin');
+  if (!hasRole) {
+    res.status(403).json({
+      error: 'Forbidden: Authorised government authority or administrator privileges are required to transfer payments.',
+    });
     return;
   }
   next();

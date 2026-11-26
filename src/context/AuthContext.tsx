@@ -11,6 +11,8 @@ interface AuthContextValue {
   logout: () => Promise<void>;
   isModerator: boolean;
   isAdministrator: boolean;
+  isGovernmentAuthority: boolean;
+  isFinancialAdmin: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -55,6 +57,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isModerator = Boolean(user?.roles.includes('moderator') || user?.roles.includes('administrator'));
   const isAdministrator = Boolean(user?.roles.includes('administrator'));
+  const isGovernmentAuthority = Boolean(user?.roles.includes('government_authority'));
+  const isFinancialAdmin = Boolean(user?.roles.includes('financial_admin') || user?.roles.includes('administrator'));
 
   return (
     <AuthContext.Provider
@@ -67,6 +71,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout,
         isModerator,
         isAdministrator,
+        isGovernmentAuthority,
+        isFinancialAdmin,
       }}
     >
       {children}

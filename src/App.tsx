@@ -21,6 +21,13 @@ import { AdminLoginPage } from './pages/Admin/AdminLoginPage';
 import { AdminDashboardPage } from './pages/Admin/AdminDashboardPage';
 import { AdminReportReviewPage } from './pages/Admin/AdminReportReviewPage';
 import { AdminContentReportsPage } from './pages/Admin/AdminContentReportsPage';
+import { PublicProjectsPage } from './pages/Gov/PublicProjectsPage';
+import { PublicProjectDetailPage } from './pages/Gov/PublicProjectDetailPage';
+import { ContractorRegistryPage } from './pages/Gov/ContractorRegistryPage';
+import { GovDashboardPage } from './pages/Gov/GovDashboardPage';
+import { GovProjectWorkspacePage } from './pages/Gov/GovProjectWorkspacePage';
+import { FinanceDashboardPage } from './pages/Finance/FinanceDashboardPage';
+import { PaymentSettingsPage } from './pages/Finance/PaymentSettingsPage';
 
 function ProtectedCitizenRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -47,6 +54,39 @@ function ProtectedModeratorRoute({ children }: { children: React.ReactNode }) {
     );
   }
   if (!user || !isModerator) {
+    return <Navigate to="/admin/login" replace />;
+  }
+  return <>{children}</>;
+}
+
+function ProtectedGovRoute({ children }: { children: React.ReactNode }) {
+  const { user, isGovernmentAuthority, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F7F6F2] text-sm text-[#4B5563]">
+        Verifying government authority privileges...
+      </div>
+    );
+  }
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+  if (!isGovernmentAuthority) {
+    return <Navigate to="/projects" replace />;
+  }
+  return <>{children}</>;
+}
+
+function ProtectedFinanceRoute({ children }: { children: React.ReactNode }) {
+  const { user, isFinancialAdmin, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F7F6F2] text-sm text-[#4B5563]">
+        Verifying financial administrator privileges...
+      </div>
+    );
+  }
+  if (!user || !isFinancialAdmin) {
     return <Navigate to="/admin/login" replace />;
   }
   return <>{children}</>;
@@ -86,6 +126,9 @@ export default function App() {
               {/* Public Routes */}
               <Route path="/" element={<LandingPage />} />
               <Route path="/explore" element={<ExplorePage />} />
+              <Route path="/projects" element={<PublicProjectsPage />} />
+              <Route path="/projects/:id" element={<PublicProjectDetailPage />} />
+              <Route path="/contractor-registry" element={<ContractorRegistryPage />} />
               <Route path="/contractors" element={<ContractorBiddingPage />} />
               <Route path="/reports/:id" element={<ReportDetailPage />} />
               <Route path="/signup" element={<SignupPage />} />
@@ -186,6 +229,42 @@ export default function App() {
                   <ProtectedModeratorRoute>
                     <AdminContentReportsPage />
                   </ProtectedModeratorRoute>
+                }
+              />
+
+              {/* Government Authority Routes */}
+              <Route
+                path="/gov"
+                element={
+                  <ProtectedGovRoute>
+                    <GovDashboardPage />
+                  </ProtectedGovRoute>
+                }
+              />
+              <Route
+                path="/gov/projects/:id"
+                element={
+                  <ProtectedGovRoute>
+                    <GovProjectWorkspacePage />
+                  </ProtectedGovRoute>
+                }
+              />
+
+              {/* Financial Admin & 1% Facilitation Fee Routes */}
+              <Route
+                path="/finance"
+                element={
+                  <ProtectedFinanceRoute>
+                    <FinanceDashboardPage />
+                  </ProtectedFinanceRoute>
+                }
+              />
+              <Route
+                path="/finance/payment-settings"
+                element={
+                  <ProtectedFinanceRoute>
+                    <PaymentSettingsPage />
+                  </ProtectedFinanceRoute>
                 }
               />
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Briefcase, CheckCircle2, MapPin, Search, ThumbsUp, ArrowRight } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
+import { PaymentSplitTransparency } from '../components/gov/PaymentSplitTransparency';
 import { EmptyState } from '../components/ui/EmptyState';
 import { LoadingSkeleton } from '../components/ui/LoadingSkeleton';
 import { IndependentNotice } from '../components/ui/IndependentNotice';
@@ -183,7 +184,8 @@ export function ContractorBiddingPage() {
                   aria-hidden="true"
                 />
                 <input
-                  type="search"
+                  type="text"
+                  role="searchbox"
                   aria-label="Search open works"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -291,6 +293,16 @@ export function ContractorBiddingPage() {
                               <span>{w.support_count} citizen support</span>
                             </span>
                           </div>
+
+                          {w.awarded_payment_breakdown && (
+                            <div className="mt-3">
+                              <PaymentSplitTransparency
+                                breakdown={w.awarded_payment_breakdown}
+                                compact
+                                showLedger={false}
+                              />
+                            </div>
+                          )}
                         </div>
 
                         <div className="md:w-64 shrink-0 rounded-lg border border-[#E2E6EC] bg-[#F7F6F2] p-4 space-y-2.5">
@@ -302,6 +314,16 @@ export function ContractorBiddingPage() {
                             <span className="text-[#4B5563]">Lowest Quote</span>
                             <span className="font-mono font-semibold text-[#0D7A6F] tabular-nums">
                               {w.lowest_bid_inr != null ? formatInrCurrency(w.lowest_bid_inr) : 'No quotes yet'}
+                            </span>
+                          </div>
+                          <div className="pt-2 border-t border-[#E2E6EC] text-xs">
+                            <span className="text-[#4B5563] block">Budget Funded By</span>
+                            <span className="mt-0.5 block font-semibold text-[#0F2942]">
+                              {isAwarded
+                                ? w.awarded_budget_funded_by || 'Pending Party / Public Attribution'
+                                : bidCount > 0
+                                ? 'Pending Award / Party Attribution'
+                                : 'Open for Bid & Funding'}
                             </span>
                           </div>
                           <Link
@@ -378,6 +400,12 @@ export function ContractorBiddingPage() {
                           </td>
                           <td className="py-3 pr-4 text-right font-mono font-semibold text-[#0F2942] tabular-nums whitespace-nowrap">
                             {formatInrCurrency(b.bid_amount_inr)}
+                            <span className="mt-1 block font-sans text-[11px] font-normal text-[#4B5563] whitespace-normal">
+                              Budget funded by{' '}
+                              <strong className="font-medium text-[#0F2942]">
+                                {b.budget_funded_by || 'Pending Attribution'}
+                              </strong>
+                            </span>
                           </td>
                           <td className="py-3 pr-4 text-right font-mono text-xs text-[#374151] tabular-nums whitespace-nowrap">
                             {b.estimated_days}d · {b.warranty_months}m warr.

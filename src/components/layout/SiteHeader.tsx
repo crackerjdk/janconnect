@@ -5,26 +5,32 @@ import { useAuth } from '../../context/AuthContext';
 import { BrandName } from '../ui/BrandName';
 
 export function SiteHeader() {
-  const { user, isModerator } = useAuth();
+  const { user, isModerator, isGovernmentAuthority, isFinancialAdmin } = useAuth();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const isActive = (path: string) => location.pathname === path;
+  const isActive = (path: string) =>
+    location.pathname === path || (path !== '/' && location.pathname.startsWith(`${path}/`));
 
   const navItems = user
     ? [
-        { label: 'Home', to: '/home' },
         { label: 'Explore', to: '/explore' },
-        { label: 'Contractor Bids', to: '/contractors' },
+        { label: 'Public Projects', to: '/projects' },
+        { label: 'Contractors', to: '/contractor-registry' },
         { label: 'My Reports', to: '/my-reports' },
-        isModerator
-          ? { label: 'Moderator', to: '/admin' }
-          : { label: 'Profile', to: `/profile/${user.username}` },
+        ...(isGovernmentAuthority ? [{ label: 'Gov Console', to: '/gov' }] : []),
+        ...(isFinancialAdmin ? [{ label: '1% Fee', to: '/finance' }] : []),
+        ...(isModerator
+          ? [{ label: 'Moderator', to: '/admin' }]
+          : !isGovernmentAuthority && !isFinancialAdmin
+          ? [{ label: 'Profile', to: `/profile/${user.username}` }]
+          : []),
       ]
     : [
         { label: 'Explore', to: '/explore' },
-        { label: 'Contractor Bids', to: '/contractors' },
-        { label: 'Safety', to: '/safety' },
+        { label: 'Public Projects', to: '/projects' },
+        { label: 'Contractors', to: '/contractor-registry' },
+        { label: 'Bids', to: '/contractors' },
         { label: 'Sign In', to: '/login' },
         { label: 'Moderator', to: '/admin/login' },
       ];
@@ -35,7 +41,7 @@ export function SiteHeader() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-[#E2E6EC] bg-[#FFFFFF]/95 backdrop-blur-sm">
-      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-8 px-4 sm:px-6">
+      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-6 px-4 sm:px-6">
         {/* Zone 1: Clean brand wordmark + colorful Uttarakhand map */}
         <Link
           to="/"
@@ -46,7 +52,7 @@ export function SiteHeader() {
         </Link>
 
         {/* Zone 2: Concise single-line navigation links */}
-        <nav aria-label="Primary" className="hidden md:flex items-center gap-6 text-sm font-medium">
+        <nav aria-label="Primary" className="hidden md:flex items-center gap-5 text-sm font-medium">
           {navItems.map((item) => (
             <Link
               key={item.to}
@@ -98,8 +104,22 @@ export function SiteHeader() {
               {item.label}
             </Link>
           ))}
+          <Link
+            to="/contractors"
+            onClick={() => setMobileOpen(false)}
+            className="block rounded-lg px-3 py-2.5 text-sm font-medium text-[#111827] hover:bg-[#F7F6F2]"
+          >
+            Community Contractor Bids
+          </Link>
           {user && (
             <>
+              <Link
+                to="/home"
+                onClick={() => setMobileOpen(false)}
+                className="block rounded-lg px-3 py-2.5 text-sm font-medium text-[#111827] hover:bg-[#F7F6F2]"
+              >
+                Citizen Home
+              </Link>
               <Link
                 to="/notifications"
                 onClick={() => setMobileOpen(false)}

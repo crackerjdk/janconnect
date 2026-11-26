@@ -6,6 +6,8 @@ import crypto from 'crypto';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import { db, initDatabase, writeAuditLog } from './server/db';
+import { buildPaymentBreakdown } from './server/govDb';
+import { registerGovRoutes } from './server/govRoutes';
 import {
   type AuthedRequest,
   checkRateLimit,
@@ -15,6 +17,7 @@ import {
   loadSessionUser,
   requireAdministrator,
   requireAuth,
+  requireAuthorityOrAdmin,
   requireModerator,
   setSessionCookie,
   signSessionToken,
@@ -45,11 +48,32 @@ import {
   type ModerationActionType,
   MAX_ATTACHMENT_BYTES,
   type PlatformStatus,
+  validateBudgetFundedBy,
   validateCommentContent,
   validateContractorBid,
   validateReportDraft,
   validateUsername,
 } from './src/utils/civicRules';
+import {
+  calculateBudgetDisbursementSplit,
+  CREATOR_REWARD_ACCOUNT_NAME,
+  validatePaymentTransferInput,
+} from './src/utils/govRules';
+
+function enrichBidWithPaymentBreakdown<T extends Record<string, unknown>>(bid: T, includeTransfers = true): T {
+  if (bid.bid_status !== 'awarded') return bid;
+  return {
+    ...bid,
+    payment_breakdown: buildPaymentBreakdown(db, {
+      contractorBidId: String(bid.id),
+      allottedBudgetInr: Number(bid.bid_amount_inr || 0),
+      isAllotted: true,
+      contractorName: String(bid.company_name || ''),
+      contractorReg: (bid.registration_number as string | null) ?? null,
+      includeTransfers,
+    }),
+  };
+}
 
 initDatabase();
 
@@ -960,37 +984,40 @@ app.get('/api/reports/public/:id', (req: AuthedRequest, res) => {
     `)
     .all(req.params.id);
 
-  const bids = db
-    .prepare(`
-      SELECT
-        cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
-        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
-        cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
-        p.username AS contractor_username, p.display_name AS contractor_display_name
-      FROM contractor_bids cb
-      JOIN profiles p ON p.id = cb.contractor_id
-      WHERE cb.complaint_id = ? AND cb.bid_status != 'withdrawn'
-      ORDER BY
-        CASE cb.bid_status WHEN 'awarded' THEN 0 WHEN 'shortlisted' THEN 1 WHEN 'submitted' THEN 2 ELSE 3 END,
-        cb.bid_amount_inr ASC,
-        cb.created_at ASC
-    `)
-    .all(req.params.id);
+  const bids = (
+    db
+      .prepare(`
+        SELECT
+          cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+          cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary, cb.budget_funded_by,
+          cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
+          p.username AS contractor_username, p.display_name AS contractor_display_name
+        FROM contractor_bids cb
+        JOIN profiles p ON p.id = cb.contractor_id
+        WHERE cb.complaint_id = ? AND cb.bid_status != 'withdrawn'
+        ORDER BY
+          CASE cb.bid_status WHEN 'awarded' THEN 0 WHEN 'shortlisted' THEN 1 WHEN 'submitted' THEN 2 ELSE 3 END,
+          cb.bid_amount_inr ASC,
+          cb.created_at ASC
+      `)
+      .all(req.params.id) as Array<Record<string, unknown>>
+  ).map((b) => enrichBidWithPaymentBreakdown(b, true));
 
-  const myBid = req.user
-    ? db
+  const myBidRaw = req.user
+    ? (db
         .prepare(`
           SELECT
             cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
-            cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
+            cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary, cb.budget_funded_by,
             cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
             p.username AS contractor_username, p.display_name AS contractor_display_name
           FROM contractor_bids cb
           JOIN profiles p ON p.id = cb.contractor_id
           WHERE cb.complaint_id = ? AND cb.contractor_id = ?
         `)
-        .get(req.params.id, req.user.id) ?? null
+        .get(req.params.id, req.user.id) as Record<string, unknown> | undefined) ?? null
     : null;
+  const myBid = myBidRaw ? enrichBidWithPaymentBreakdown(myBidRaw, true) : null;
 
   const userHasSupported = req.user
     ? Boolean(
@@ -1166,6 +1193,9 @@ app.get('/api/contractors/works', (req: AuthedRequest, res) => {
         (SELECT COUNT(*) FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status != 'withdrawn') AS bid_count,
         (SELECT MIN(cb.bid_amount_inr) FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status IN ('submitted', 'shortlisted', 'awarded')) AS lowest_bid_inr,
         (SELECT cb.id FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status = 'awarded' LIMIT 1) AS awarded_bid_id,
+        (SELECT cb.bid_amount_inr FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status = 'awarded' LIMIT 1) AS awarded_amount_inr,
+        (SELECT cb.company_name FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status = 'awarded' LIMIT 1) AS awarded_contractor_company,
+        (SELECT cb.budget_funded_by FROM contractor_bids cb WHERE cb.complaint_id = c.id AND cb.bid_status = 'awarded' LIMIT 1) AS awarded_budget_funded_by,
         (SELECT m.id FROM complaint_media m WHERE m.complaint_id = c.id AND m.review_status = 'approved' LIMIT 1) AS preview_media_id,
         (SELECT m.media_type FROM complaint_media m WHERE m.complaint_id = c.id AND m.review_status = 'approved' LIMIT 1) AS preview_media_type
       FROM complaints c
@@ -1189,11 +1219,23 @@ app.get('/api/contractors/works', (req: AuthedRequest, res) => {
 
   const enriched = rows.map((r) => {
     const locPath = buildLocationPath(r.location_id as string);
+    const awardedBidId = (r.awarded_bid_id as string | null) ?? null;
+    const awardedAmt = Number(r.awarded_amount_inr || 0);
     return {
       ...r,
       district_id: locPath.districtId,
       district_name: locPath.district,
       preview_media_url: r.preview_media_id ? `/api/media/published/${r.preview_media_id}` : null,
+      awarded_payment_breakdown:
+        awardedBidId && awardedAmt > 0
+          ? buildPaymentBreakdown(db, {
+              contractorBidId: awardedBidId,
+              allottedBudgetInr: awardedAmt,
+              isAllotted: true,
+              contractorName: (r.awarded_contractor_company as string | null) ?? null,
+              includeTransfers: true,
+            })
+          : null,
       user_has_supported: req.user
         ? Boolean(
             db
@@ -1215,21 +1257,23 @@ app.get('/api/contractors/works', (req: AuthedRequest, res) => {
 });
 
 app.get('/api/contractors/my-bids', requireAuth, (req: AuthedRequest, res) => {
-  const bids = db
-    .prepare(`
-      SELECT
-        cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
-        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
-        cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
-        p.username AS contractor_username, p.display_name AS contractor_display_name,
-        c.title AS report_title, c.category AS report_category, c.generalized_location
-      FROM contractor_bids cb
-      JOIN profiles p ON p.id = cb.contractor_id
-      JOIN complaints c ON c.id = cb.complaint_id
-      WHERE cb.contractor_id = ?
-      ORDER BY cb.updated_at DESC
-    `)
-    .all(req.user!.id);
+  const bids = (
+    db
+      .prepare(`
+        SELECT
+          cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+          cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary, cb.budget_funded_by,
+          cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
+          p.username AS contractor_username, p.display_name AS contractor_display_name,
+          c.title AS report_title, c.category AS report_category, c.generalized_location
+        FROM contractor_bids cb
+        JOIN profiles p ON p.id = cb.contractor_id
+        JOIN complaints c ON c.id = cb.complaint_id
+        WHERE cb.contractor_id = ?
+        ORDER BY cb.updated_at DESC
+      `)
+      .all(req.user!.id) as Array<Record<string, unknown>>
+  ).map((b) => enrichBidWithPaymentBreakdown(b, true));
 
   res.json({ bids });
 });
@@ -1266,6 +1310,7 @@ app.post('/api/reports/:id/bids', requireAuth, (req: AuthedRequest, res) => {
     estimatedDays?: number | string;
     warrantyMonths?: number | string;
     proposalSummary?: string;
+    budgetFundedBy?: string;
   };
 
   const validation = validateContractorBid({
@@ -1275,6 +1320,7 @@ app.post('/api/reports/:id/bids', requireAuth, (req: AuthedRequest, res) => {
     estimatedDays: Number(body.estimatedDays),
     warrantyMonths: Number(body.warrantyMonths ?? 12),
     proposalSummary: body.proposalSummary || '',
+    budgetFundedBy: body.budgetFundedBy ?? null,
   });
 
   if (!validation.valid) {
@@ -1288,6 +1334,7 @@ app.post('/api/reports/:id/bids', requireAuth, (req: AuthedRequest, res) => {
   const estimatedDays = Math.round(Number(body.estimatedDays));
   const warrantyMonths = Math.round(Number(body.warrantyMonths ?? 12));
   const proposalSummary = (body.proposalSummary || '').trim();
+  const budgetFundedBy = validateBudgetFundedBy(body.budgetFundedBy).value;
 
   const existing = db
     .prepare(`SELECT id, bid_status FROM contractor_bids WHERE complaint_id = ? AND contractor_id = ?`)
@@ -1311,21 +1358,22 @@ app.post('/api/reports/:id/bids', requireAuth, (req: AuthedRequest, res) => {
           estimated_days = ?,
           warranty_months = ?,
           proposal_summary = ?,
+          budget_funded_by = ?,
           bid_status = 'submitted',
           reviewer_note = NULL,
           reviewed_by = NULL,
           reviewed_at = NULL,
           updated_at = datetime('now')
         WHERE id = ?
-      `).run(companyName, registrationNumber, bidAmountInr, estimatedDays, warrantyMonths, proposalSummary, bidId);
+      `).run(companyName, registrationNumber, bidAmountInr, estimatedDays, warrantyMonths, proposalSummary, budgetFundedBy, bidId);
     } else {
       db.prepare(`
         INSERT INTO contractor_bids (
           id, complaint_id, contractor_id, company_name, registration_number,
-          bid_amount_inr, estimated_days, warranty_months, proposal_summary, bid_status
+          bid_amount_inr, estimated_days, warranty_months, proposal_summary, budget_funded_by, bid_status
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted')
-      `).run(bidId, report.id, userId, companyName, registrationNumber, bidAmountInr, estimatedDays, warrantyMonths, proposalSummary);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted')
+      `).run(bidId, report.id, userId, companyName, registrationNumber, bidAmountInr, estimatedDays, warrantyMonths, proposalSummary, budgetFundedBy);
     }
 
     if (report.user_id !== userId) {
@@ -1347,14 +1395,14 @@ app.post('/api/reports/:id/bids', requireAuth, (req: AuthedRequest, res) => {
     action: existing ? 'contractor_bid_updated' : 'contractor_bid_submitted',
     targetType: 'contractor_bid',
     targetId: bidId,
-    metadata: { complaint_id: report.id, bid_amount_inr: bidAmountInr, estimated_days: estimatedDays },
+    metadata: { complaint_id: report.id, bid_amount_inr: bidAmountInr, estimated_days: estimatedDays, budget_funded_by: budgetFundedBy },
   });
 
   const saved = db
     .prepare(`
       SELECT
         cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
-        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
+        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary, cb.budget_funded_by,
         cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
         p.username AS contractor_username, p.display_name AS contractor_display_name
       FROM contractor_bids cb
@@ -2069,21 +2117,23 @@ app.get('/api/admin/reports/:id', requireModerator, (req, res) => {
     `)
     .all(req.params.id, report.category);
 
-  const bids = db
-    .prepare(`
-      SELECT
-        cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
-        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
-        cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
-        p.username AS contractor_username, p.display_name AS contractor_display_name
-      FROM contractor_bids cb
-      JOIN profiles p ON p.id = cb.contractor_id
-      WHERE cb.complaint_id = ? AND cb.bid_status != 'withdrawn'
-      ORDER BY
-        CASE cb.bid_status WHEN 'awarded' THEN 0 WHEN 'shortlisted' THEN 1 WHEN 'submitted' THEN 2 ELSE 3 END,
-        cb.bid_amount_inr ASC
-    `)
-    .all(req.params.id);
+  const bids = (
+    db
+      .prepare(`
+        SELECT
+          cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+          cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary, cb.budget_funded_by,
+          cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
+          p.username AS contractor_username, p.display_name AS contractor_display_name
+        FROM contractor_bids cb
+        JOIN profiles p ON p.id = cb.contractor_id
+        WHERE cb.complaint_id = ? AND cb.bid_status != 'withdrawn'
+        ORDER BY
+          CASE cb.bid_status WHEN 'awarded' THEN 0 WHEN 'shortlisted' THEN 1 WHEN 'submitted' THEN 2 ELSE 3 END,
+          cb.bid_amount_inr ASC
+      `)
+      .all(req.params.id) as Array<Record<string, unknown>>
+  ).map((b) => enrichBidWithPaymentBreakdown(b, true));
 
   res.json({
     report,
@@ -2108,33 +2158,49 @@ app.get('/api/admin/bids', requireModerator, (req, res) => {
     params.push(status);
   }
 
-  const rows = db
-    .prepare(`
-      SELECT
-        cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
-        cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary,
-        cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
-        p.username AS contractor_username, p.display_name AS contractor_display_name,
-        c.title AS report_title, c.category AS report_category, c.generalized_location
-      FROM contractor_bids cb
-      JOIN profiles p ON p.id = cb.contractor_id
-      JOIN complaints c ON c.id = cb.complaint_id
-      ${where}
-      ORDER BY
-        CASE cb.bid_status WHEN 'submitted' THEN 0 WHEN 'shortlisted' THEN 1 WHEN 'awarded' THEN 2 ELSE 3 END,
-        cb.created_at DESC
-      LIMIT 120
-    `)
-    .all(...params);
+  const rows = (
+    db
+      .prepare(`
+        SELECT
+          cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+          cb.bid_amount_inr, cb.estimated_days, cb.warranty_months, cb.proposal_summary, cb.budget_funded_by,
+          cb.bid_status, cb.reviewer_note, cb.reviewed_at, cb.created_at, cb.updated_at,
+          p.username AS contractor_username, p.display_name AS contractor_display_name,
+          c.title AS report_title, c.category AS report_category, c.generalized_location
+        FROM contractor_bids cb
+        JOIN profiles p ON p.id = cb.contractor_id
+        JOIN complaints c ON c.id = cb.complaint_id
+        ${where}
+        ORDER BY
+          CASE cb.bid_status WHEN 'submitted' THEN 0 WHEN 'shortlisted' THEN 1 WHEN 'awarded' THEN 2 ELSE 3 END,
+          cb.created_at DESC
+        LIMIT 120
+      `)
+      .all(...params) as Array<Record<string, unknown>>
+  ).map((b) => enrichBidWithPaymentBreakdown(b, true));
 
   res.json({ bids: rows });
 });
 
 app.post('/api/admin/bids/:bidId/review', requireModerator, (req: AuthedRequest, res) => {
-  const { decision, note } = req.body as { decision?: 'shortlist' | 'award' | 'reject'; note?: string };
+  const { decision, note, budgetFundedBy } = req.body as {
+    decision?: 'shortlist' | 'award' | 'reject';
+    note?: string;
+    budgetFundedBy?: string | null;
+  };
   if (!decision || !['shortlist', 'award', 'reject'].includes(decision)) {
     res.status(400).json({ error: 'Decision must be shortlist, award, or reject.' });
     return;
+  }
+
+  let nextFunding: string | null | undefined = undefined;
+  if (budgetFundedBy !== undefined) {
+    const fundingCheck = validateBudgetFundedBy(budgetFundedBy);
+    if (!fundingCheck.valid) {
+      res.status(400).json({ error: fundingCheck.error });
+      return;
+    }
+    nextFunding = fundingCheck.value;
   }
 
   const bid = db
@@ -2152,6 +2218,7 @@ app.post('/api/admin/bids/:bidId/review', requireModerator, (req: AuthedRequest,
         company_name: string;
         bid_amount_inr: number;
         bid_status: string;
+        budget_funded_by: string | null;
         report_title: string;
         report_author_id: string;
       }
@@ -2174,6 +2241,7 @@ app.post('/api/admin/bids/:bidId/review', requireModerator, (req: AuthedRequest,
       ? 'Shortlisted for scope verification.'
       : 'Not selected in this bidding round.'
   );
+  const resolvedFunding = nextFunding !== undefined ? nextFunding : bid.budget_funded_by;
 
   const tx = db.transaction(() => {
     if (decision === 'award') {
@@ -2194,11 +2262,12 @@ app.post('/api/admin/bids/:bidId/review', requireModerator, (req: AuthedRequest,
       SET
         bid_status = ?,
         reviewer_note = ?,
+        budget_funded_by = ?,
         reviewed_by = ?,
         reviewed_at = datetime('now'),
         updated_at = datetime('now')
       WHERE id = ?
-    `).run(nextStatus, cleanNote, req.user!.id, bid.id);
+    `).run(nextStatus, cleanNote, resolvedFunding, req.user!.id, bid.id);
 
     db.prepare(`
       INSERT INTO notifications (id, recipient_id, type, related_id, message)
@@ -2230,10 +2299,248 @@ app.post('/api/admin/bids/:bidId/review', requireModerator, (req: AuthedRequest,
     action: `contractor_bid_${decision}`,
     targetType: 'contractor_bid',
     targetId: bid.id,
-    metadata: { complaint_id: bid.complaint_id, next_status: nextStatus, note: cleanNote },
+    metadata: { complaint_id: bid.complaint_id, next_status: nextStatus, note: cleanNote, budget_funded_by: resolvedFunding },
   });
 
-  res.json({ ok: true, bid_status: nextStatus });
+  res.json({ ok: true, bid_status: nextStatus, budget_funded_by: resolvedFunding });
+});
+
+// Authority / Admin Payment Transfer on Awarded Community Contractor Bid
+// First 1% is deducted to creator account "Naman's Account" as reward, then 99% is sent to contractor.
+app.post('/api/admin/bids/:bidId/transfers', requireAuthorityOrAdmin, (req: AuthedRequest, res) => {
+  const val = validatePaymentTransferInput(req.body || {});
+  if (!val.valid || !val.value) {
+    res.status(400).json({ error: val.error });
+    return;
+  }
+
+  const { transferMode, amountInr, transferChannel, transferReference, transferDate, note } = val.value;
+
+  const bid = db
+    .prepare(`
+      SELECT
+        cb.id, cb.complaint_id, cb.contractor_id, cb.company_name, cb.registration_number,
+        cb.bid_amount_inr, cb.bid_status, c.title AS report_title
+      FROM contractor_bids cb
+      JOIN complaints c ON c.id = cb.complaint_id
+      WHERE cb.id = ?
+    `)
+    .get(req.params.bidId) as
+    | {
+        id: string;
+        complaint_id: string;
+        contractor_id: string;
+        company_name: string;
+        registration_number: string | null;
+        bid_amount_inr: number;
+        bid_status: string;
+        report_title: string;
+      }
+    | undefined;
+
+  if (!bid) {
+    res.status(404).json({ error: 'Contractor bid not found.' });
+    return;
+  }
+  if (bid.bid_status !== 'awarded') {
+    res.status(400).json({ error: 'Only awarded contractor bids are eligible for payment transfer.' });
+    return;
+  }
+
+  const split = calculateBudgetDisbursementSplit(bid.bid_amount_inr);
+  const existing = buildPaymentBreakdown(db, {
+    contractorBidId: bid.id,
+    allottedBudgetInr: bid.bid_amount_inr,
+    isAllotted: true,
+    contractorName: bid.company_name,
+    contractorReg: bid.registration_number,
+    includeTransfers: false,
+  });
+
+  if (transferMode === 'creator_1pct') {
+    if (existing.creator_remaining_inr <= 0) {
+      res.status(409).json({ error: `1% Creator Reward to ${CREATOR_REWARD_ACCOUNT_NAME} is already fully transferred.` });
+      return;
+    }
+    const sendAmt = amountInr ?? existing.creator_remaining_inr;
+    if (sendAmt > existing.creator_remaining_inr) {
+      res.status(400).json({
+        error: `Transfer exceeds remaining 1% Creator Reward balance (${formatInrCurrency(existing.creator_remaining_inr)}).`,
+      });
+      return;
+    }
+
+    const transferId = crypto.randomUUID();
+    db.prepare(`
+      INSERT INTO budget_payment_transfers (
+        id, project_id, contractor_bid_id, recipient_type, recipient_name, recipient_account_ref,
+        allotted_budget_inr, amount_inr, transfer_channel, transfer_reference, transfer_date, note, transferred_by
+      ) VALUES (?, NULL, ?, 'creator_naman', ?, 'Creator Reward (1%)', ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      transferId,
+      bid.id,
+      CREATOR_REWARD_ACCOUNT_NAME,
+      split.allottedBudgetInr,
+      sendAmt,
+      transferChannel,
+      transferReference,
+      transferDate,
+      note ?? `First 1% Creator Reward deducted from awarded bid on "${bid.report_title}".`,
+      req.user!.id
+    );
+
+    writeAuditLog({
+      actorId: req.user!.id,
+      action: 'bid_creator_reward_transferred',
+      targetType: 'budget_payment_transfer',
+      targetId: transferId,
+      metadata: { bidId: bid.id, recipient: CREATOR_REWARD_ACCOUNT_NAME, amountInr: sendAmt, transferReference },
+    });
+  } else if (transferMode === 'contractor_99pct') {
+    if (existing.creator_remaining_inr > 0) {
+      res.status(400).json({
+        error: `First deduct and transfer the remaining 1% Creator Reward (${formatInrCurrency(
+          existing.creator_remaining_inr
+        )}) to ${CREATOR_REWARD_ACCOUNT_NAME} before transferring the 99% contractor payment.`,
+      });
+      return;
+    }
+    if (existing.contractor_remaining_inr <= 0) {
+      res.status(409).json({ error: 'The 99% Contractor Payment has already been fully transferred.' });
+      return;
+    }
+    const sendAmt = amountInr ?? existing.contractor_remaining_inr;
+    if (sendAmt > existing.contractor_remaining_inr) {
+      res.status(400).json({
+        error: `Transfer exceeds remaining 99% Contractor balance (${formatInrCurrency(existing.contractor_remaining_inr)}).`,
+      });
+      return;
+    }
+
+    const transferId = crypto.randomUUID();
+    db.prepare(`
+      INSERT INTO budget_payment_transfers (
+        id, project_id, contractor_bid_id, recipient_type, recipient_name, recipient_account_ref,
+        allotted_budget_inr, amount_inr, transfer_channel, transfer_reference, transfer_date, note, transferred_by
+      ) VALUES (?, NULL, ?, 'contractor', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      transferId,
+      bid.id,
+      bid.company_name,
+      bid.registration_number,
+      split.allottedBudgetInr,
+      sendAmt,
+      transferChannel,
+      transferReference,
+      transferDate,
+      note ?? `99% Contractor payment transferred after 1% deduction ("${bid.report_title}").`,
+      req.user!.id
+    );
+
+    writeAuditLog({
+      actorId: req.user!.id,
+      action: 'bid_contractor_payment_transferred',
+      targetType: 'budget_payment_transfer',
+      targetId: transferId,
+      metadata: { bidId: bid.id, contractor: bid.company_name, amountInr: sendAmt, transferReference },
+    });
+
+    db.prepare(`
+      INSERT INTO notifications (id, recipient_id, type, related_id, message)
+      VALUES (?, ?, 'bid_payment_transferred', ?, ?)
+    `).run(
+      crypto.randomUUID(),
+      bid.contractor_id,
+      bid.complaint_id,
+      `Payment of ${formatInrCurrency(sendAmt)} (Ref: ${transferReference}) transferred to ${bid.company_name} for "${bid.report_title}" after 1% deduction to ${CREATOR_REWARD_ACCOUNT_NAME}.`
+    );
+  } else {
+    if (existing.creator_remaining_inr <= 0 && existing.contractor_remaining_inr <= 0) {
+      res.status(409).json({ error: 'Allotted bid budget (1% Creator Reward + 99% Contractor Payment) is already fully transferred.' });
+      return;
+    }
+
+    const creatorAmt = existing.creator_remaining_inr;
+    const contractorAmt = existing.contractor_remaining_inr;
+    const creatorRef = creatorAmt > 0 && contractorAmt > 0 ? `${transferReference}-1PCT` : transferReference;
+    const contractorRef = creatorAmt > 0 && contractorAmt > 0 ? `${transferReference}-99PCT` : transferReference;
+
+    const tx = db.transaction(() => {
+      if (creatorAmt > 0) {
+        db.prepare(`
+          INSERT INTO budget_payment_transfers (
+            id, project_id, contractor_bid_id, recipient_type, recipient_name, recipient_account_ref,
+            allotted_budget_inr, amount_inr, transfer_channel, transfer_reference, transfer_date, note, transferred_by
+          ) VALUES (?, NULL, ?, 'creator_naman', ?, 'Creator Reward (1%)', ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          crypto.randomUUID(),
+          bid.id,
+          CREATOR_REWARD_ACCOUNT_NAME,
+          split.allottedBudgetInr,
+          creatorAmt,
+          transferChannel,
+          creatorRef,
+          transferDate,
+          note ?? `First 1% Creator Reward deducted to ${CREATOR_REWARD_ACCOUNT_NAME} ("${bid.report_title}").`,
+          req.user!.id
+        );
+      }
+
+      if (contractorAmt > 0) {
+        db.prepare(`
+          INSERT INTO budget_payment_transfers (
+            id, project_id, contractor_bid_id, recipient_type, recipient_name, recipient_account_ref,
+            allotted_budget_inr, amount_inr, transfer_channel, transfer_reference, transfer_date, note, transferred_by
+          ) VALUES (?, NULL, ?, 'contractor', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          crypto.randomUUID(),
+          bid.id,
+          bid.company_name,
+          bid.registration_number,
+          split.allottedBudgetInr,
+          contractorAmt,
+          transferChannel,
+          contractorRef,
+          transferDate,
+          note ?? `99% Contractor net payment sent after 1% deduction ("${bid.report_title}").`,
+          req.user!.id
+        );
+      }
+    });
+    tx();
+
+    writeAuditLog({
+      actorId: req.user!.id,
+      action: 'bid_full_split_transferred',
+      targetType: 'contractor_bid',
+      targetId: bid.id,
+      metadata: { creatorAmt, contractorAmt, transferReference },
+    });
+
+    if (contractorAmt > 0) {
+      db.prepare(`
+        INSERT INTO notifications (id, recipient_id, type, related_id, message)
+        VALUES (?, ?, 'bid_payment_transferred', ?, ?)
+      `).run(
+        crypto.randomUUID(),
+        bid.contractor_id,
+        bid.complaint_id,
+        `Payment of ${formatInrCurrency(contractorAmt)} (Ref: ${contractorRef}) transferred to ${bid.company_name} for "${bid.report_title}" after 1% (${formatInrCurrency(creatorAmt)}) deduction to ${CREATOR_REWARD_ACCOUNT_NAME}.`
+      );
+    }
+  }
+
+  res.status(201).json({
+    ok: true,
+    payment_breakdown: buildPaymentBreakdown(db, {
+      contractorBidId: bid.id,
+      allottedBudgetInr: bid.bid_amount_inr,
+      isAllotted: true,
+      contractorName: bid.company_name,
+      contractorReg: bid.registration_number,
+      includeTransfers: true,
+    }),
+  });
 });
 
 app.post('/api/admin/reports/:id/moderate', requireModerator, (req: AuthedRequest, res) => {
@@ -2499,6 +2806,8 @@ app.post('/api/admin/roles', requireAdministrator, (req: AuthedRequest, res) => 
   writeAuditLog({ actorId: req.user!.id, action: 'role_assigned', targetType: 'user_roles', targetId: userId, metadata: { role } });
   res.json({ ok: true });
 });
+
+registerGovRoutes(app);
 
 app.use('/api', (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (err instanceof multer.MulterError) {

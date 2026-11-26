@@ -2,9 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Bot } from 'lucide-react';
 import { AppShell } from '../../components/layout/AppShell';
+import { PaymentSplitTransparency } from '../../components/gov/PaymentSplitTransparency';
+import { PaymentTransferActionForm } from '../../components/gov/PaymentTransferActionForm';
 import { StatusLabel } from '../../components/ui/StatusLabel';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { LoadingSkeleton } from '../../components/ui/LoadingSkeleton';
+import { useAuth } from '../../context/AuthContext';
 import { apiFetch } from '../../services/api';
 import { useToast } from '../../context/ToastContext';
 import type { ContractorBid, MediaAsset } from '../../types/civic';
@@ -30,7 +33,9 @@ interface AdminReportDetail {
 
 export function AdminReportReviewPage() {
   const { id } = useParams<{ id: string }>();
+  const { isAdministrator, isGovernmentAuthority, isFinancialAdmin } = useAuth();
   const { showToast } = useToast();
+  const canTransferPayments = isAdministrator || isGovernmentAuthority || isFinancialAdmin;
 
   const [report, setReport] = useState<AdminReportDetail | null>(null);
   const [media, setMedia] = useState<MediaAsset[]>([]);
@@ -41,6 +46,7 @@ export function AdminReportReviewPage() {
     Array<{ id: string; title: string; platform_status: PlatformStatus; generalized_location: string }>
   >([]);
   const [bids, setBids] = useState<ContractorBid[]>([]);
+  const [bidFunders, setBidFunders] = useState<Record<string, string>>({});
   const [bidBusyId, setBidBusyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -86,9 +92,13 @@ export function AdminReportReviewPage() {
   const handleReviewBid = async (bidId: string, decision: 'shortlist' | 'award' | 'reject') => {
     setBidBusyId(bidId);
     try {
+      const payload: { decision: string; budgetFundedBy?: string } = { decision };
+      if (bidFunders[bidId] !== undefined) {
+        payload.budgetFundedBy = bidFunders[bidId];
+      }
       await apiFetch(`/api/admin/bids/${bidId}/review`, {
         method: 'POST',
-        body: JSON.stringify({ decision }),
+        body: JSON.stringify(payload),
       });
       showToast(`Contractor bid marked ${decision}.`, 'success');
       await loadDetail();
@@ -223,8 +233,22 @@ export function AdminReportReviewPage() {
                           </div>
                         </div>
                         <p className="text-[#374151]">{b.proposal_summary}</p>
+                        <div className="rounded bg-[#F7F6F2] px-2.5 py-1 text-[11px] text-[#0F2942] inline-block">
+                          <span className="text-[#4B5563]">Budget funded by </span>
+                          <strong className="font-semibold">
+                            {b.budget_funded_by || 'Pending Party / Public Attribution'}
+                          </strong>
+                        </div>
                         {b.bid_status !== 'awarded' && (
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2 pt-1">
+                            <input
+                              type="text"
+                              maxLength={120}
+                              value={bidFunders[b.id] ?? (b.budget_funded_by || '')}
+                              onChange={(e) => setBidFunders((prev) => ({ ...prev, [b.id]: e.target.value }))}
+                              placeholder="Budget funded by (optional)..."
+                              className="flex-1 min-w-[180px] rounded border border-[#E2E6EC] px-2.5 py-1 text-xs"
+                            />
                             {b.bid_status !== 'shortlisted' && (
                               <button
                                 type="button"
@@ -252,6 +276,22 @@ export function AdminReportReviewPage() {
                               >
                                 Reject
                               </button>
+                            )}
+                          </div>
+                        )}
+                        {b.bid_status === 'awarded' && b.payment_breakdown && (
+                          <div className="space-y-3 pt-2">
+                            <PaymentSplitTransparency breakdown={b.payment_breakdown} />
+                            {canTransferPayments && (
+                              <PaymentTransferActionForm
+                                endpoint={`/api/admin/bids/${b.id}/transfers`}
+                                breakdown={b.payment_breakdown}
+                                onTransferred={(_next, msg) => {
+                                  showToast(msg, 'success');
+                                  void loadDetail();
+                                }}
+                                onError={(msg) => showToast(msg, 'error')}
+                              />
                             )}
                           </div>
                         )}

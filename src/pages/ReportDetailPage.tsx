@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Briefcase, CheckCircle2, Flag, MapPin, MessageSquare, ThumbsUp } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
+import { PaymentSplitTransparency } from '../components/gov/PaymentSplitTransparency';
 import { StatusLabel } from '../components/ui/StatusLabel';
 import { IndependentNotice } from '../components/ui/IndependentNotice';
 import { LoadingSkeleton } from '../components/ui/LoadingSkeleton';
@@ -56,6 +57,7 @@ export function ReportDetailPage() {
   const [estimatedDays, setEstimatedDays] = useState('15');
   const [warrantyMonths, setWarrantyMonths] = useState('12');
   const [proposalSummary, setProposalSummary] = useState('');
+  const [budgetFundedBy, setBudgetFundedBy] = useState('');
   const [bidSubmitting, setBidSubmitting] = useState(false);
   const [bidFieldErrors, setBidFieldErrors] = useState<Record<string, string>>({});
 
@@ -88,6 +90,7 @@ export function ReportDetailPage() {
         setEstimatedDays(String(ownBid.estimated_days));
         setWarrantyMonths(String(ownBid.warranty_months));
         setProposalSummary(ownBid.proposal_summary);
+        setBudgetFundedBy(ownBid.budget_funded_by || '');
       }
     } catch (err) {
       setError((err as Error).message);
@@ -161,6 +164,7 @@ export function ReportDetailPage() {
       estimatedDays: Number(estimatedDays),
       warrantyMonths: Number(warrantyMonths),
       proposalSummary,
+      budgetFundedBy,
     });
 
     if (!validation.valid) {
@@ -181,6 +185,7 @@ export function ReportDetailPage() {
           estimatedDays: Number(estimatedDays),
           warrantyMonths: Number(warrantyMonths),
           proposalSummary,
+          budgetFundedBy,
         }),
       });
       showToast(
@@ -235,7 +240,7 @@ export function ReportDetailPage() {
   };
 
   const piiWarnings = detectPotentialPiiHints(commentText);
-  const bidPiiWarnings = detectPotentialPiiHints(`${companyName}\n${proposalSummary}`);
+  const bidPiiWarnings = detectPotentialPiiHints(`${companyName}\n${proposalSummary}\n${budgetFundedBy}`);
   const awardedBid = bids.find((b) => b.bid_status === 'awarded') || null;
   const lowestBid = bids.length > 0 ? Math.min(...bids.map((b) => b.bid_amount_inr)) : null;
 
@@ -420,19 +425,30 @@ export function ReportDetailPage() {
               </div>
 
               {awardedBid && (
-                <div className="rounded-lg border border-[#0D7A6F]/30 bg-[#0D7A6F]/5 p-4 flex items-start gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-[#0D7A6F] shrink-0 mt-0.5" aria-hidden="true" />
-                  <div className="text-xs text-[#1F2942] space-y-1">
-                    <p className="font-semibold text-[#0F2942]">
-                      Selected Contractor: {awardedBid.company_name} ({awardedBid.registration_number})
-                    </p>
-                    <p>
-                      Quoted <span className="font-mono font-semibold">{formatInrCurrency(awardedBid.bid_amount_inr)}</span>{' '}
-                      · Timeline <span className="font-mono">{awardedBid.estimated_days} days</span> · Warranty{' '}
-                      <span className="font-mono">{awardedBid.warranty_months} months</span>
-                    </p>
-                    {awardedBid.reviewer_note && <p className="text-[#4B5563]">Note: {awardedBid.reviewer_note}</p>}
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-[#0D7A6F]/30 bg-[#0D7A6F]/5 p-4 flex items-start gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-[#0D7A6F] shrink-0 mt-0.5" aria-hidden="true" />
+                    <div className="text-xs text-[#1F2942] space-y-1.5 flex-1">
+                      <p className="font-semibold text-[#0F2942]">
+                        Selected Contractor: {awardedBid.company_name} ({awardedBid.registration_number})
+                      </p>
+                      <p>
+                        Quoted <span className="font-mono font-semibold">{formatInrCurrency(awardedBid.bid_amount_inr)}</span>{' '}
+                        · Timeline <span className="font-mono">{awardedBid.estimated_days} days</span> · Warranty{' '}
+                        <span className="font-mono">{awardedBid.warranty_months} months</span>
+                      </p>
+                      <div className="rounded bg-white px-2.5 py-1.5 text-xs text-[#0F2942]">
+                        <span className="text-[#4B5563]">Budget funded by </span>
+                        <strong className="font-semibold">
+                          {awardedBid.budget_funded_by || 'Pending Party / Public Budget Attribution'}
+                        </strong>
+                      </div>
+                      {awardedBid.reviewer_note && <p className="text-[#4B5563]">Note: {awardedBid.reviewer_note}</p>}
+                    </div>
                   </div>
+                  {awardedBid.payment_breakdown && (
+                    <PaymentSplitTransparency breakdown={awardedBid.payment_breakdown} />
+                  )}
                 </div>
               )}
 
@@ -479,6 +495,12 @@ export function ReportDetailPage() {
                             </td>
                             <td className="py-3 text-xs text-[#374151] leading-relaxed">
                               <p>{b.proposal_summary}</p>
+                              <div className="mt-2 rounded bg-[#F7F6F2] px-2.5 py-1.5 text-[11px] text-[#0F2942]">
+                                <span className="text-[#4B5563]">Budget funded by </span>
+                                <strong className="font-semibold">
+                                  {b.budget_funded_by || 'Pending Party / Public Budget Attribution'}
+                                </strong>
+                              </div>
                               {b.reviewer_note && (
                                 <p className="mt-1 text-[11px] text-[#6B7280]">Review note: {b.reviewer_note}</p>
                               )}
@@ -610,6 +632,24 @@ export function ReportDetailPage() {
                             <p className="mt-1 text-xs text-red-700">{bidFieldErrors.warrantyMonths}</p>
                           )}
                         </div>
+                      </div>
+
+                      <div>
+                        <label htmlFor="bid-funded-by" className="block text-xs font-medium text-[#374151] mb-1">
+                          Budget Funded By (Political Party / Public Fund / Sponsor — Optional)
+                        </label>
+                        <input
+                          id="bid-funded-by"
+                          type="text"
+                          maxLength={120}
+                          value={budgetFundedBy}
+                          onChange={(e) => setBudgetFundedBy(e.target.value)}
+                          placeholder="e.g., ABC Political Party, MPLADS, State PWD Fund"
+                          className="w-full rounded-lg border border-[#E2E6EC] px-3 py-2 text-sm text-[#111827]"
+                        />
+                        {bidFieldErrors.budgetFundedBy && (
+                          <p className="mt-1 text-xs text-red-700">{bidFieldErrors.budgetFundedBy}</p>
+                        )}
                       </div>
 
                       <div>

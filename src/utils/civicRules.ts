@@ -32,7 +32,7 @@ export type ModerationActionType =
   | 'reject'
   | 'remove';
 
-export type UserRole = 'citizen' | 'moderator' | 'administrator';
+export type UserRole = 'citizen' | 'moderator' | 'administrator' | 'government_authority' | 'financial_admin';
 
 export interface StatusPresentation {
   label: string;
@@ -342,6 +342,29 @@ export interface ContractorBidInput {
   estimatedDays: number;
   warrantyMonths: number;
   proposalSummary: string;
+  budgetFundedBy?: string | null;
+}
+
+export function validateBudgetFundedBy(raw?: string | null): { valid: boolean; value: string | null; error?: string } {
+  const cleaned = (raw || '').replace(/[\r\n\t]+/g, ' ').trim();
+  if (!cleaned) {
+    return { valid: true, value: null };
+  }
+  if (cleaned.length < 2 || cleaned.length > 120) {
+    return {
+      valid: false,
+      value: null,
+      error: 'Budget funding party or sponsor attribution must be between 2 and 120 characters.',
+    };
+  }
+  if (/[<>]/.test(cleaned)) {
+    return {
+      valid: false,
+      value: null,
+      error: 'Budget funding attribution cannot contain HTML characters.',
+    };
+  }
+  return { valid: true, value: cleaned };
 }
 
 export function formatInrCurrency(amount: number): string {
@@ -379,6 +402,11 @@ export function validateContractorBid(input: ContractorBidInput): ValidationResu
   }
   if (proposalSummary.length < 20 || proposalSummary.length > 1500) {
     errors.proposalSummary = 'Work execution & materials proposal must be between 20 and 1,500 characters.';
+  }
+
+  const fundingCheck = validateBudgetFundedBy(input.budgetFundedBy);
+  if (!fundingCheck.valid && fundingCheck.error) {
+    errors.budgetFundedBy = fundingCheck.error;
   }
 
   const piiWarnings = detectPotentialPiiHints(`${companyName}\n${proposalSummary}`);

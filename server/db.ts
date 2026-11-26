@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { SEED_LOCATIONS } from '../src/data/uttarakhandLocations';
+import { initGovDatabase } from './govDb';
 
 const dataDir = path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(dataDir)) {
@@ -54,7 +55,7 @@ export function initDatabase(): void {
     CREATE TABLE IF NOT EXISTS user_roles (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-      role TEXT NOT NULL CHECK (role IN ('citizen', 'moderator', 'administrator')),
+      role TEXT NOT NULL CHECK (role IN ('citizen', 'moderator', 'administrator', 'government_authority', 'financial_admin')),
       assigned_by TEXT REFERENCES profiles(id) ON DELETE SET NULL,
       assigned_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE (user_id, role)
@@ -283,6 +284,13 @@ export function initDatabase(): void {
       WHERE id_type IS NOT NULL AND id_number_hash IS NOT NULL AND verification_status IN ('pending', 'verified');
   `);
 
+  const existingBidCols = new Set(
+    (db.prepare(`PRAGMA table_info(contractor_bids)`).all() as Array<{ name: string }>).map((c) => c.name)
+  );
+  if (!existingBidCols.has('budget_funded_by')) {
+    db.exec(`ALTER TABLE contractor_bids ADD COLUMN budget_funded_by TEXT`);
+  }
+
   const insertLoc = db.prepare(`
     INSERT OR IGNORE INTO locations (id, parent_id, name, type, state_code, latitude, longitude)
     VALUES (@id, @parent_id, @name, @type, @state_code, @latitude, @longitude)
@@ -294,6 +302,34 @@ export function initDatabase(): void {
     }
   });
   seedTx();
+
+  // Safely upgrade existing user_roles table CHECK constraint if created before v0.2 roles
+  const userRolesMeta = db
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'user_roles'`)
+    .get() as { sql?: string } | undefined;
+  if (userRolesMeta?.sql && !userRolesMeta.sql.includes('government_authority')) {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      BEGIN TRANSACTION;
+      CREATE TABLE user_roles_new (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('citizen', 'moderator', 'administrator', 'government_authority', 'financial_admin')),
+        assigned_by TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+        assigned_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (user_id, role)
+      );
+      INSERT INTO user_roles_new (id, user_id, role, assigned_by, assigned_at)
+      SELECT id, user_id, role, assigned_by, assigned_at FROM user_roles;
+      DROP TABLE user_roles;
+      ALTER TABLE user_roles_new RENAME TO user_roles;
+      CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
+      COMMIT;
+    `);
+    db.pragma('foreign_keys = ON');
+  }
+
+  initGovDatabase(db);
 }
 
 export function writeAuditLog(params: {

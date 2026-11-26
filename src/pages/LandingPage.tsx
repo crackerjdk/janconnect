@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ShieldCheck, MapPin, Eye, Lock, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { AppShell } from '../components/layout/AppShell';
 import { IndependentNotice } from '../components/ui/IndependentNotice';
+import { PinnedWorkDoneSection } from '../components/gov/PinnedWorkDoneSection';
 import { REPORT_CATEGORIES } from '../utils/civicRules';
 import { useAuth } from '../context/AuthContext';
 
@@ -33,7 +34,7 @@ export function LandingPage() {
                 that matter.
               </p>
 
-              <div className="mt-8 flex flex-wrap items-center gap-4">
+              <div className="mt-8 flex flex-wrap items-center gap-3">
                 <Link
                   to={user ? '/reports/create' : '/signup'}
                   className="inline-flex items-center gap-2 rounded-lg bg-[#0D7A6F] px-5 py-3 text-sm font-semibold text-white hover:bg-[#0A635A] transition-colors whitespace-nowrap"
@@ -41,15 +42,22 @@ export function LandingPage() {
                   <span>Report a Problem</span>
                   <ArrowRight className="w-4 h-4" aria-hidden="true" />
                 </Link>
+                <a
+                  href="#work-done"
+                  className="inline-flex items-center gap-2 rounded-lg border border-[#0D7A6F] bg-white px-4 py-3 text-sm font-semibold text-[#0D7A6F] hover:bg-[#F7F6F2] transition-colors whitespace-nowrap"
+                >
+                  <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+                  <span>Work Done</span>
+                </a>
                 <Link
                   to="/explore"
-                  className="inline-flex items-center gap-2 rounded-lg border border-[#E2E6EC] bg-white px-5 py-3 text-sm font-semibold text-[#0F2942] hover:bg-[#F7F6F2] transition-colors whitespace-nowrap"
+                  className="inline-flex items-center gap-2 rounded-lg border border-[#E2E6EC] bg-white px-4 py-3 text-sm font-semibold text-[#0F2942] hover:bg-[#F7F6F2] transition-colors whitespace-nowrap"
                 >
                   <span>Explore Reports</span>
                 </Link>
                 <Link
                   to="/contractors"
-                  className="inline-flex items-center gap-2 rounded-lg border border-[#E2E6EC] bg-white px-5 py-3 text-sm font-semibold text-[#0D7A6F] hover:bg-[#F7F6F2] transition-colors whitespace-nowrap"
+                  className="inline-flex items-center gap-2 rounded-lg border border-[#E2E6EC] bg-white px-4 py-3 text-sm font-semibold text-[#0F2942] hover:bg-[#F7F6F2] transition-colors whitespace-nowrap"
                 >
                   <span>Contractor Bids</span>
                 </Link>
@@ -95,6 +103,9 @@ export function LandingPage() {
           </div>
         </div>
       </section>
+
+      {/* Top Work Done Pinned by JanConnect Team (Directly near Report a Problem) */}
+      <PinnedWorkDoneSection id="work-done" />
 
       {/* 2. How जनConnect Works */}
       <section id="how-it-works" className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
